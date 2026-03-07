@@ -1,0 +1,283 @@
+import { Injectable, Logger } from '@nestjs/common';
+import axios, { AxiosError } from 'axios';
+import { CompanyEnv } from '../../entities/enums';
+import {
+  SRI_URLS,
+  SRI_STATE_RECEIVED,
+  SRI_STATE_AUTHORIZED,
+} from './sri.constants';
+
+export interface SriReceptionResult {
+  accepted: boolean;
+  state: string;
+  messages: SriMessage[];
+}
+
+export interface SriAuthorizationResult {
+  authorized: boolean;
+  state: string;
+  authorizationNumber: string | null;
+  authorizedAt: string | null;
+  authorizedXml: string | null;
+  messages: SriMessage[];
+}
+
+export interface SriMessage {
+  identifier: string;
+  message: string;
+  additionalInfo: string;
+  type: string;
+}
+
+/** Retryable network errors (not SRI logic errors — actual connection failures) */
+const RETRYABLE_CODES = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH'];
+const MAX_NETWORK_RETRIES = 3;
+const NETWORK_RETRY_DELAYS = [3000, 5000, 10000];
+
+@Injectable()
+export class SriService {
+  private readonly logger = new Logger(SriService.name);
+
+  /**
+   * Send signed XML to SRI for validation (recepción).
+   * SOAP call to validarComprobante. Retries on network failures.
+   */
+  async sendToReception(signedXml: string, env: CompanyEnv): Promise<SriReceptionResult> {
+    const url = env === CompanyEnv.PRODUCTION
+      ? SRI_URLS.production.reception
+      : SRI_URLS.test.reception;
+
+    const xmlBase64 = Buffer.from(signedXml, 'utf-8').toString('base64');
+
+    const soapEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:ec="http://ec.gob.sri.ws.recepcion">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ec:validarComprobante>
+      <xml>${xmlBase64}</xml>
+    </ec:validarComprobante>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+    const soapStart = Date.now();
+    const responseData = await this.soapCallWithRetry(url, soapEnvelope, 'reception');
+    const soapMs = Date.now() - soapStart;
+
+    this.logger.debug(`SRI reception raw response:\n${responseData}`);
+    const result = this.parseReceptionResponse(responseData);
+    this.logger.log(`SRI reception [${soapMs}ms]: accepted=${result.accepted}, state=${result.state}, messages=${JSON.stringify(result.messages.map(m => ({ id: m.identifier, msg: m.message, info: m.additionalInfo })))}`);
+    return result;
+  }
+
+  /**
+   * Check authorization status of a document by access key.
+   * SOAP call to autorizacionComprobante. Retries on network failures.
+   */
+  async checkAuthorization(accessKey: string, env: CompanyEnv): Promise<SriAuthorizationResult> {
+    const url = env === CompanyEnv.PRODUCTION
+      ? SRI_URLS.production.authorization
+      : SRI_URLS.test.authorization;
+
+    const soapEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:ec="http://ec.gob.sri.ws.autorizacion">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ec:autorizacionComprobante>
+      <claveAccesoComprobante>${accessKey}</claveAccesoComprobante>
+    </ec:autorizacionComprobante>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+    const soapStart = Date.now();
+    const responseData = await this.soapCallWithRetry(url, soapEnvelope, 'authorization');
+    const soapMs = Date.now() - soapStart;
+
+    const result = this.parseAuthorizationResponse(responseData);
+    this.logger.log(`SRI authorization [${soapMs}ms]: state=${result.state}, authorized=${result.authorized}, authNum=${result.authorizationNumber ?? 'null'}, messages=${JSON.stringify(result.messages.map(m => ({ id: m.identifier, msg: m.message, info: m.additionalInfo })))}`);
+    return result;
+  }
+
+  // ── SOAP call with network retry ──
+
+  /**
+   * Execute a SOAP call with automatic retry on network errors.
+   * Only retries on transient network failures (ECONNRESET, ETIMEDOUT, etc.),
+   * NOT on SRI logic errors (those are handled by the caller).
+   */
+  private async soapCallWithRetry(url: string, soapEnvelope: string, label: string): Promise<string> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_NETWORK_RETRIES; attempt++) {
+      try {
+        const response = await axios.post(url.replace('?wsdl', ''), soapEnvelope, {
+          headers: {
+            'Content-Type': 'text/xml; charset=utf-8',
+            'SOAPAction': '',
+          },
+          timeout: 30000,
+          // Accept any status to inspect the body ourselves
+          validateStatus: () => true,
+        });
+
+        const data = typeof response.data === 'string' ? response.data : String(response.data);
+
+        // Detect non-SOAP responses (HTML error pages, 5xx, etc.)
+        if (response.status >= 500) {
+          const isHtml = data.includes('<html') || data.includes('<!DOCTYPE');
+          if (isHtml) {
+            this.logger.warn(`SRI ${label}: HTTP ${response.status} with HTML response (attempt ${attempt + 1})`);
+            if (attempt < MAX_NETWORK_RETRIES) {
+              await this.sleep(NETWORK_RETRY_DELAYS[attempt] ?? 10000);
+              continue;
+            }
+            throw new Error(`SRI no disponible (HTTP ${response.status}). El servicio del SRI puede estar en mantenimiento.`);
+          }
+        }
+
+        // Detect SOAP faults
+        if (data.includes('<soap:Fault') || data.includes('<soapenv:Fault') || data.includes('<Fault')) {
+          const faultMsg = this.extractSoapFault(data);
+          this.logger.warn(`SRI ${label}: SOAP Fault: ${faultMsg} (attempt ${attempt + 1})`);
+          if (attempt < MAX_NETWORK_RETRIES) {
+            await this.sleep(NETWORK_RETRY_DELAYS[attempt] ?? 10000);
+            continue;
+          }
+          throw new Error(`SRI devolvió un error SOAP: ${faultMsg}`);
+        }
+
+        // Verify we got a valid SOAP response (not an empty body or garbage)
+        // Check for SRI response wrapper tags — don't require <estado> as it may be
+        // absent in legitimate responses (e.g., document not yet processed)
+        const isSoapResponse = data.includes('Envelope') && (
+          data.includes('Response') || data.includes('Respuesta')
+        );
+        if (!isSoapResponse) {
+          this.logger.warn(`SRI ${label}: Invalid/empty response (attempt ${attempt + 1}): ${data.substring(0, 200)}`);
+          if (attempt < MAX_NETWORK_RETRIES) {
+            await this.sleep(NETWORK_RETRY_DELAYS[attempt] ?? 10000);
+            continue;
+          }
+          throw new Error('SRI devolvió una respuesta vacía o inválida');
+        }
+
+        return data;
+      } catch (error: any) {
+        if (error instanceof AxiosError && this.isRetryableNetworkError(error)) {
+          this.logger.warn(`SRI ${label}: Network error "${error.code}" (attempt ${attempt + 1}/${MAX_NETWORK_RETRIES + 1})`);
+          lastError = error;
+          if (attempt < MAX_NETWORK_RETRIES) {
+            await this.sleep(NETWORK_RETRY_DELAYS[attempt] ?? 10000);
+            continue;
+          }
+        }
+
+        // Non-retryable error or exhausted retries
+        if (error.response?.data) {
+          this.logger.error(`SRI ${label} response body:\n${error.response.data}`);
+        }
+
+        const msg = lastError
+          ? `Error de conexión con el SRI tras ${MAX_NETWORK_RETRIES + 1} intentos: ${lastError.message}`
+          : `Error al comunicarse con el SRI: ${error.message}`;
+        throw new Error(msg);
+      }
+    }
+
+    throw new Error(`SRI ${label}: Agotados los reintentos de conexión`);
+  }
+
+  private isRetryableNetworkError(error: AxiosError): boolean {
+    if (error.code && RETRYABLE_CODES.includes(error.code)) return true;
+    // Timeout
+    if (error.code === 'ECONNABORTED') return true;
+    // No response received at all
+    if (!error.response && error.request) return true;
+    return false;
+  }
+
+  private extractSoapFault(xml: string): string {
+    const faultString = xml.match(/<faultstring>([^<]*)<\/faultstring>/)?.[1];
+    const detail = xml.match(/<detail>([^<]*)<\/detail>/)?.[1];
+    return faultString ? `${faultString}${detail ? ' — ' + detail : ''}` : 'Error SOAP desconocido';
+  }
+
+  // ── Response parsers ──
+
+  /**
+   * Parse SRI reception SOAP response.
+   */
+  private parseReceptionResponse(xml: string): SriReceptionResult {
+    const stateMatch = xml.match(/<estado>([^<]+)<\/estado>/);
+    const state = stateMatch?.[1] ?? 'UNKNOWN';
+
+    const messages = this.extractMessages(xml);
+
+    return {
+      accepted: state === SRI_STATE_RECEIVED,
+      state,
+      messages,
+    };
+  }
+
+  /**
+   * Parse SRI authorization SOAP response.
+   */
+  private parseAuthorizationResponse(xml: string): SriAuthorizationResult {
+    const stateMatch = xml.match(/<estado>([^<]+)<\/estado>/);
+    const state = stateMatch?.[1] ?? 'UNKNOWN';
+
+    const authNumMatch = xml.match(/<numeroAutorizacion>([^<]+)<\/numeroAutorizacion>/);
+    const authorizationNumber = authNumMatch?.[1] ?? null;
+
+    const authDateMatch = xml.match(/<fechaAutorizacion>([^<]+)<\/fechaAutorizacion>/);
+    const authorizedAt = authDateMatch?.[1] ?? null;
+
+    const compMatch = xml.match(/<comprobante><!\[CDATA\[([\s\S]*?)\]\]><\/comprobante>/);
+    const authorizedXml = compMatch?.[1] ?? null;
+
+    const messages = this.extractMessages(xml);
+
+    return {
+      authorized: state === SRI_STATE_AUTHORIZED,
+      state,
+      authorizationNumber,
+      authorizedAt,
+      authorizedXml,
+      messages,
+    };
+  }
+
+  /**
+   * Extract SRI message blocks from SOAP XML.
+   * SRI uses `<mensaje>` both as a wrapper block and as an inner text field,
+   * so we match outer blocks that contain `<identificador>` to avoid confusion.
+   */
+  private extractMessages(xml: string): SriMessage[] {
+    const messages: SriMessage[] = [];
+
+    const blockRegex = /<mensaje>\s*<identificador>([\s\S]*?)<\/tipo>\s*<\/mensaje>/g;
+    let match: RegExpExecArray | null;
+    while ((match = blockRegex.exec(xml)) !== null) {
+      const block = match[0];
+      messages.push({
+        identifier: this.extractTag(block, 'identificador'),
+        message: this.extractTag(block, 'mensaje'),
+        additionalInfo: this.extractTag(block, 'informacionAdicional'),
+        type: this.extractTag(block, 'tipo'),
+      });
+    }
+
+    return messages;
+  }
+
+  private extractTag(xml: string, tag: string): string {
+    const match = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+    return match?.[1] ?? '';
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}

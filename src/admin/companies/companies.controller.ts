@@ -1,0 +1,192 @@
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  NotFoundException,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import type { Response } from 'express';
+import {
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { IsArray, IsEnum } from 'class-validator';
+
+import { CompaniesService } from './companies.service';
+import { CreateCompanyDto } from './dto/create-company.dto';
+import { UpdateCompanyDto } from './dto/update-company.dto';
+import { CreateEmissionPointDto } from './dto/create-emission-point.dto';
+import { UpdateEmissionPointDto } from './dto/update-emission-point.dto';
+import { SetSequentialDto } from './dto/set-sequential.dto';
+import { CompanyStatus, SriDocTypeCode } from '../../entities/enums';
+
+class SetDocTypesDto {
+  @IsArray()
+  @IsEnum(SriDocTypeCode, { each: true })
+  codes: SriDocTypeCode[];
+}
+
+@ApiTags('Admin - Empresas')
+@ApiBearerAuth()
+@Controller('admin/companies')
+export class CompaniesController {
+  constructor(private readonly companiesService: CompaniesService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Listar empresas con paginación y filtros' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'accountId', required: false, type: Number })
+  @ApiQuery({ name: 'status', required: false, enum: CompanyStatus })
+  findAll(
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+    @Query('search') search?: string,
+    @Query('accountId') accountId?: number,
+    @Query('status') status?: CompanyStatus,
+  ) {
+    return this.companiesService.findAll(
+      +page,
+      +limit,
+      search,
+      accountId ? +accountId : undefined,
+      status,
+    );
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Obtener empresa por ID' })
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.companiesService.findOne(id);
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Crear nueva empresa' })
+  create(@Body() dto: CreateCompanyDto) {
+    return this.companiesService.create(dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Actualizar empresa' })
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateCompanyDto,
+  ) {
+    return this.companiesService.update(id, dto);
+  }
+
+  @Post(':id/emission-points')
+  @ApiOperation({ summary: 'Agregar punto de emisión a empresa' })
+  addEmissionPoint(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateEmissionPointDto,
+  ) {
+    return this.companiesService.addEmissionPoint(id, dto);
+  }
+
+  @Patch(':id/emission-points/:empId')
+  @ApiOperation({ summary: 'Actualizar punto de emisión' })
+  updateEmissionPoint(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('empId', ParseIntPipe) empId: number,
+    @Body() dto: UpdateEmissionPointDto,
+  ) {
+    return this.companiesService.updateEmissionPoint(id, empId, dto);
+  }
+
+  @Delete(':id/emission-points/:empId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Eliminar punto de emisión de empresa' })
+  removeEmissionPoint(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('empId', ParseIntPipe) empId: number,
+  ) {
+    return this.companiesService.removeEmissionPoint(id, empId);
+  }
+
+  @Get(':id/sequentials')
+  @ApiOperation({ summary: 'Listar secuenciales configurados' })
+  getSequentials(@Param('id', ParseIntPipe) id: number) {
+    return this.companiesService.getSequentials(id);
+  }
+
+  @Put(':id/sequentials')
+  @ApiOperation({ summary: 'Configurar secuencial inicial para un tipo de documento y punto de emisión' })
+  setSequential(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetSequentialDto,
+  ) {
+    return this.companiesService.setSequential(id, dto);
+  }
+
+  @Put(':id/doc-types')
+  @ApiOperation({ summary: 'Establecer tipos de documento habilitados' })
+  setDocTypes(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetDocTypesDto,
+  ) {
+    return this.companiesService.setDocTypes(id, dto.codes);
+  }
+
+  @Post(':id/logo')
+  @ApiOperation({ summary: 'Subir logo de empresa' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB
+      fileFilter: (_req, file, cb) => {
+        if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+          cb(new BadRequestException('Solo se permiten imágenes PNG o JPG'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  uploadLogo(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Archivo requerido');
+    return this.companiesService.uploadLogo(id, file.buffer, file.mimetype);
+  }
+
+  @Delete(':id/logo')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Eliminar logo de empresa' })
+  deleteLogo(@Param('id', ParseIntPipe) id: number) {
+    return this.companiesService.deleteLogo(id);
+  }
+
+  @Get(':id/logo')
+  @ApiOperation({ summary: 'Obtener imagen del logo' })
+  async getLogo(
+    @Param('id', ParseIntPipe) id: number,
+    @Res() res: Response,
+  ) {
+    const { logoS3Key } = await this.companiesService.getLogoUrl(id);
+    if (!logoS3Key) throw new NotFoundException('La empresa no tiene logo');
+
+    const buffer = await this.companiesService.downloadLogo(logoS3Key);
+    const contentType = logoS3Key.endsWith('.png') ? 'image/png' : 'image/jpeg';
+    res.set({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400' });
+    res.send(buffer);
+  }
+}
