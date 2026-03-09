@@ -10,6 +10,7 @@ import { EmissionPoint } from '../entities/emission-point.entity';
 import { CompanyDocType } from '../entities/company-doc-type.entity';
 import { EngineModule } from '../engine/engine.module';
 import { QueuesModule } from '../queues/queues.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PublicDocumentsController } from './documents/documents.controller';
 import { PublicDocumentsService } from './documents/documents.service';
 import { XmlDocumentsController } from './documents/xml-documents.controller';
@@ -22,6 +23,7 @@ import { InfoService } from './info/info.service';
     TypeOrmModule.forFeature([Company, Document, DocumentTimeline, DocumentError, DocumentFile, Certificate, EmissionPoint, CompanyDocType]),
     EngineModule,
     QueuesModule,
+    NotificationsModule,
   ],
   controllers: [PublicDocumentsController, XmlDocumentsController, InfoController],
   providers: [PublicDocumentsService, XmlDocumentsService, InfoService],

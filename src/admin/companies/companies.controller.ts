@@ -35,6 +35,8 @@ import { CreateEmissionPointDto } from './dto/create-emission-point.dto';
 import { UpdateEmissionPointDto } from './dto/update-emission-point.dto';
 import { SetSequentialDto } from './dto/set-sequential.dto';
 import { CompanyStatus, SriDocTypeCode } from '../../entities/enums';
+import { SmtpService } from '../../client/smtp/smtp.service';
+import { UpsertSmtpDto } from '../../client/smtp/dto/upsert-smtp.dto';
 
 class SetDocTypesDto {
   @IsArray()
@@ -46,7 +48,10 @@ class SetDocTypesDto {
 @ApiBearerAuth()
 @Controller('admin/companies')
 export class CompaniesController {
-  constructor(private readonly companiesService: CompaniesService) {}
+  constructor(
+    private readonly companiesService: CompaniesService,
+    private readonly smtpService: SmtpService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'Listar empresas con paginación y filtros' })
@@ -188,5 +193,39 @@ export class CompaniesController {
     const contentType = logoS3Key.endsWith('.png') ? 'image/png' : 'image/jpeg';
     res.set({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400' });
     res.send(buffer);
+  }
+
+  // ── SMTP ──────────────────────────────────────────────────
+
+  @Get(':id/smtp')
+  @ApiOperation({ summary: 'Obtener configuración SMTP de una empresa' })
+  getSmtp(@Param('id', ParseIntPipe) id: number) {
+    return this.smtpService.findByCompany(id);
+  }
+
+  @Put(':id/smtp')
+  @ApiOperation({ summary: 'Crear o actualizar configuración SMTP de una empresa' })
+  upsertSmtp(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpsertSmtpDto,
+  ) {
+    return this.smtpService.upsert(id, dto);
+  }
+
+  @Post(':id/smtp/test')
+  @ApiOperation({ summary: 'Enviar email de prueba con la configuración SMTP de una empresa' })
+  testSmtp(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('email') email: string,
+  ) {
+    if (!email) throw new BadRequestException('Se requiere un email para la prueba');
+    return this.smtpService.testConnection(id, email);
+  }
+
+  @Delete(':id/smtp')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Eliminar configuración SMTP de una empresa' })
+  removeSmtp(@Param('id', ParseIntPipe) id: number) {
+    return this.smtpService.remove(id);
   }
 }

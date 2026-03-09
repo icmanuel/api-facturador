@@ -13,16 +13,19 @@ import { LogsModule } from './admin/logs/logs.module';
 import { SettingsModule } from './admin/settings/settings.module';
 import { DashboardModule } from './admin/dashboard/dashboard.module';
 import { PlatformAdminsModule } from './admin/platform-admins/platform-admins.module';
+import { ErrorAnalyticsModule } from './admin/error-analytics/error-analytics.module';
 import { ClientProfileModule } from './client/profile/profile.module';
 import { ClientCompaniesModule } from './client/companies/companies.module';
 import { ClientDocumentsModule } from './client/documents/documents.module';
 import { ClientUsersModule } from './client/users/users.module';
 import { ClientDashboardModule } from './client/dashboard/dashboard.module';
 import { ClientBillingModule } from './client/billing/billing.module';
+import { ClientSmtpModule } from './client/smtp/smtp.module';
 import { PublicApiModule } from './public-api/public-api.module';
 import { EngineModule } from './engine/engine.module';
 import { QueuesModule } from './queues/queues.module';
 import { EventsModule } from './events/events.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -42,6 +45,7 @@ import { EventsModule } from './events/events.module';
     SettingsModule,
     DashboardModule,
     PlatformAdminsModule,
+    ErrorAnalyticsModule,
     // Client modules
     ClientProfileModule,
     ClientCompaniesModule,
@@ -49,11 +53,13 @@ import { EventsModule } from './events/events.module';
     ClientUsersModule,
     ClientDashboardModule,
     ClientBillingModule,
+    ClientSmtpModule,
     // Public API + Engine
     PublicApiModule,
     EngineModule,
     QueuesModule,
     EventsModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

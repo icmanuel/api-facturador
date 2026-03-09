@@ -20,12 +20,14 @@ import { DocumentTimeline } from '../entities/document-timeline.entity';
 import { DocumentError } from '../entities/document-error.entity';
 import { DocumentFile } from '../entities/document-file.entity';
 import { Certificate } from '../entities/certificate.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     ConfigModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([Document, DocumentTimeline, DocumentError, DocumentFile, Certificate]),
+    NotificationsModule,
   ],
   providers: [
     SequentialService,

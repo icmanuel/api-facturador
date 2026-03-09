@@ -4,9 +4,10 @@ import { Account } from '../../entities/account.entity';
 import { AccountUser } from '../../entities/account-user.entity';
 import { AccountsController } from './accounts.controller';
 import { AccountsService } from './accounts.service';
+import { NotificationsModule } from '../../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Account, AccountUser])],
+  imports: [TypeOrmModule.forFeature([Account, AccountUser]), NotificationsModule],
   controllers: [AccountsController],
   providers: [AccountsService],
 })

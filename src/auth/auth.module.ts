@@ -9,6 +9,7 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { MailService } from '../common/services/mail.service';
+import { RefreshTokenService } from './refresh-token.service';
 import { PlatformAdmin } from '../entities/platform-admin.entity';
 import { AccountUser } from '../entities/account-user.entity';
 
@@ -22,7 +23,7 @@ import { AccountUser } from '../entities/account-user.entity';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get('JWT_SECRET'),
-        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '8h') },
+        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '15m') },
       }),
     }),
   ],
@@ -30,6 +31,7 @@ import { AccountUser } from '../entities/account-user.entity';
   providers: [
     AuthService,
     MailService,
+    RefreshTokenService,
     JwtStrategy,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],

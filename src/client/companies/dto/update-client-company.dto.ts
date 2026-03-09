@@ -1,13 +1,39 @@
-import { IsBoolean, IsEnum, IsOptional, IsString, IsUrl, Length } from 'class-validator';
+import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, IsUrl, Length } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { AccessKeyMode, CompanyEnv, SequentialMode } from '../../../entities/enums';
 
 export class UpdateClientCompanyDto {
+  @ApiPropertyOptional({ description: 'Razón social', maxLength: 300 })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre comercial', maxLength: 300 })
+  @IsOptional()
+  @IsString()
+  tradeName?: string;
+
+  @ApiPropertyOptional({ description: 'Dirección principal' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({ description: 'Correo electrónico' })
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @ApiPropertyOptional({ description: 'Teléfono', maxLength: 30 })
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
   @ApiPropertyOptional({ description: 'Código de establecimiento (3 dígitos)', example: '001' })
   @IsOptional()
   @IsString()
   @Length(3, 3)
   establishment?: string;
+
   @ApiPropertyOptional({ example: true })
   @IsOptional()
   @IsBoolean()
@@ -17,6 +43,16 @@ export class UpdateClientCompanyDto {
   @IsOptional()
   @IsBoolean()
   notifyCompany?: boolean;
+
+  @ApiPropertyOptional({ description: 'Correo para notificaciones (errores, alertas de firma, etc.)' })
+  @IsOptional()
+  @IsEmail()
+  notificationEmail?: string;
+
+  @ApiPropertyOptional({ description: 'Permitir excedentes sobre el plan', default: false })
+  @IsOptional()
+  @IsBoolean()
+  overageEnabled?: boolean;
 
   @ApiPropertyOptional({ description: 'Ambiente SRI', enum: CompanyEnv })
   @IsOptional()

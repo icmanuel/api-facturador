@@ -11,11 +11,7 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CompanyEnv, AccessKeyMode, SequentialMode } from '../../../entities/enums';
 
-export class CreateCompanyDto {
-  @ApiProperty({ description: 'ID de la cuenta propietaria' })
-  @IsNumber()
-  accountId: number;
-
+export class CreateClientCompanyDto {
   @ApiProperty({ description: 'ID del plan de suscripción' })
   @IsNumber()
   planId: number;
@@ -50,21 +46,12 @@ export class CreateCompanyDto {
   @IsString()
   phone?: string;
 
-  @ApiPropertyOptional({
-    description: 'Ambiente SRI',
-    enum: CompanyEnv,
-    default: CompanyEnv.TEST,
-  })
+  @ApiPropertyOptional({ description: 'Ambiente SRI', enum: CompanyEnv, default: CompanyEnv.TEST })
   @IsOptional()
   @IsEnum(CompanyEnv)
   env?: CompanyEnv;
 
-  @ApiPropertyOptional({
-    description: 'Código de establecimiento (3 dígitos)',
-    default: '001',
-    minLength: 3,
-    maxLength: 3,
-  })
+  @ApiPropertyOptional({ description: 'Código de establecimiento (3 dígitos)', default: '001' })
   @IsOptional()
   @IsString()
   @Length(3, 3)
@@ -81,7 +68,7 @@ export class CreateCompanyDto {
   webhookSecret?: string;
 
   @ApiPropertyOptional({
-    description: 'Modo de clave de acceso: "platform" = la plataforma genera la clave, "client" = el cliente la envía',
+    description: 'Modo de clave de acceso: "platform" = la plataforma genera, "client" = el cliente la envía',
     enum: AccessKeyMode,
     default: AccessKeyMode.PLATFORM,
   })
@@ -90,7 +77,7 @@ export class CreateCompanyDto {
   accessKeyMode?: AccessKeyMode;
 
   @ApiPropertyOptional({
-    description: 'Modo de secuencial: "platform" = la plataforma genera el secuencial, "client" = el cliente lo envía',
+    description: 'Modo de secuencial: "platform" = la plataforma genera, "client" = el cliente lo envía',
     enum: SequentialMode,
     default: SequentialMode.PLATFORM,
   })
@@ -98,48 +85,32 @@ export class CreateCompanyDto {
   @IsEnum(SequentialMode)
   sequentialMode?: SequentialMode;
 
-  @ApiPropertyOptional({
-    description: 'Permitir excedentes sobre el plan',
-    default: false,
-  })
+  @ApiPropertyOptional({ description: 'Permitir excedentes sobre el plan', default: false })
   @IsOptional()
   @IsBoolean()
   overageEnabled?: boolean;
 
-  @ApiPropertyOptional({
-    description: 'Notificar al cliente final por email',
-    default: true,
-  })
+  @ApiPropertyOptional({ description: 'Notificar al cliente final por email', default: true })
   @IsOptional()
   @IsBoolean()
   notifyClient?: boolean;
 
-  @ApiPropertyOptional({
-    description: 'Notificar a la empresa por email',
-    default: true,
-  })
+  @ApiPropertyOptional({ description: 'Notificar a la empresa por email', default: true })
   @IsOptional()
   @IsBoolean()
   notifyCompany?: boolean;
 
-  @ApiPropertyOptional({
-    description: 'Correo para notificaciones (errores, alertas de firma, etc.)',
-  })
+  @ApiPropertyOptional({ description: 'Correo para notificaciones (errores, alertas de firma, etc.)' })
   @IsOptional()
   @IsEmail()
   notificationEmail?: string;
 
-  @ApiPropertyOptional({
-    description: 'Zona horaria',
-    default: 'America/Guayaquil',
-  })
+  @ApiPropertyOptional({ description: 'Zona horaria', default: 'America/Guayaquil' })
   @IsOptional()
   @IsString()
   timezone?: string;
 
-  @ApiPropertyOptional({
-    description: 'Fecha de inicio de facturación (YYYY-MM-DD). Si no se envía, se usa la fecha actual.',
-  })
+  @ApiPropertyOptional({ description: 'Fecha de inicio de facturación (YYYY-MM-DD). Si no se envía, se usa la fecha actual.' })
   @IsOptional()
   @IsString()
   billingStartDate?: string;

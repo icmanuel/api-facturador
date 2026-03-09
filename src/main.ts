@@ -31,7 +31,8 @@ async function bootstrap() {
       '## SaaS de Facturación Electrónica para Ecuador (SRI)\n\n' +
       '### Autenticación\n\n' +
       '- **Panel Admin/Client**: Bearer JWT obtenido en `/api/v1/auth/admin/login` o `/api/v1/auth/client/login`\n' +
-      '- **API Pública**: Header `X-API-Key` con la clave API de la empresa\n\n' +
+      '- **API Pública (documentos)**: Header `X-API-Key` con la clave API de la empresa (Company API Key)\n' +
+      '- **API Cuenta (gestión de empresas)**: Header `X-Account-Key` con la clave API de la cuenta (Account API Key)\n\n' +
       '### API Pública — Documentos\n\n' +
       'Los endpoints de la API pública identifican documentos por su **clave de acceso** (49 dígitos numéricos), ' +
       'no por ID interno. La clave de acceso es generada al crear el documento y se retorna en la respuesta.\n\n' +
@@ -49,6 +50,7 @@ async function bootstrap() {
     .setVersion('1.0')
     .addBearerAuth()
     .addApiKey({ type: 'apiKey', name: 'X-API-Key', in: 'header' }, 'api-key')
+    .addApiKey({ type: 'apiKey', name: 'X-Account-Key', in: 'header' }, 'account-key')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

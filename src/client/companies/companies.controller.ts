@@ -14,13 +14,19 @@ import {
   ParseIntPipe,
   Res,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiSecurity } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Public } from '../../common/decorators/public.decorator';
+import { JwtOrAccountKeyGuard } from '../../common/guards/jwt-or-account-key.guard';
 import { ClientCompaniesService } from './companies.service';
+import { CreateClientCompanyDto } from './dto/create-client-company.dto';
 import { UpdateClientCompanyDto } from './dto/update-client-company.dto';
+import { SetDocTypesDto } from './dto/set-doc-types.dto';
+import { UploadCertificateDto } from './dto/upload-certificate.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
 import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
 import { SetSequentialDto } from '../../admin/companies/dto/set-sequential.dto';
@@ -28,6 +34,9 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('Client - Companies')
 @ApiBearerAuth()
+@ApiSecurity('account-key')
+@Public()
+@UseGuards(JwtOrAccountKeyGuard)
 @Controller('client/companies')
 export class ClientCompaniesController {
   constructor(private readonly companiesService: ClientCompaniesService) {}
@@ -36,6 +45,15 @@ export class ClientCompaniesController {
   @ApiOperation({ summary: 'Listar empresas de la cuenta' })
   findAll(@CurrentUser('accountId') accountId: number) {
     return this.companiesService.findAll(accountId);
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Crear empresa en la cuenta' })
+  create(
+    @CurrentUser('accountId') accountId: number,
+    @Body() dto: CreateClientCompanyDto,
+  ) {
+    return this.companiesService.create(accountId, dto);
   }
 
   @Get(':id')
@@ -105,6 +123,48 @@ export class ClientCompaniesController {
     const contentType = logoS3Key.endsWith('.png') ? 'image/png' : 'image/jpeg';
     res.set({ 'Content-Type': contentType, 'Cache-Control': 'public, max-age=86400' });
     res.send(buffer);
+  }
+
+  // ── Doc Types ──
+
+  @Put(':id/doc-types')
+  @ApiOperation({ summary: 'Establecer tipos de documento habilitados' })
+  setDocTypes(
+    @CurrentUser('accountId') accountId: number,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetDocTypesDto,
+  ) {
+    return this.companiesService.setDocTypes(accountId, id, dto.codes);
+  }
+
+  // ── Certificates ──
+
+  @Post(':id/certificates')
+  @ApiOperation({ summary: 'Subir certificado .p12 de firma electrónica' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.originalname.toLowerCase().endsWith('.p12')) {
+          cb(new BadRequestException('Solo se permiten archivos .p12'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  uploadCertificate(
+    @CurrentUser('accountId') accountId: number,
+    @CurrentUser('id') userId: number,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadCertificateDto,
+  ) {
+    if (!file) throw new BadRequestException('Archivo .p12 requerido');
+    return this.companiesService.uploadCertificate(
+      accountId, id, file.buffer, file.originalname, dto.password, userId,
+    );
   }
 
   // ── Emission Points ──

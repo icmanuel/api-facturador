@@ -1,0 +1,415 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+
+/* ────────── Interfaces ────────── */
+
+export interface DocRejectedData {
+  companyName: string;
+  companyRuc: string;
+  companyEmail: string | null;
+  notificationEmail: string | null;
+  docType: string;
+  sequential: string;
+  accessKey: string;
+  errors: { code: string; message: string; detail?: string }[];
+}
+
+export interface CertExpiryData {
+  companyName: string;
+  companyRuc: string;
+  companyEmail: string | null;
+  notificationEmail: string | null;
+  certSubject: string | null;
+  expiresAt: string; // YYYY-MM-DD
+  daysLeft: number;
+  expired: boolean;
+}
+
+export interface LimitReachedData {
+  companyName: string;
+  companyRuc: string;
+  companyEmail: string | null;
+  notificationEmail: string | null;
+  docLimit: number;
+  docsUsed: number;
+  overageEnabled: boolean;
+}
+
+export interface WarningMessageData {
+  accountName: string;
+  accountEmail: string;
+  companyEmails: { email: string | null; notificationEmail: string | null }[];
+  message: string;
+}
+
+export interface AccountBlockedData {
+  accountName: string;
+  accountEmail: string;
+  companyEmails: { email: string | null; notificationEmail: string | null }[];
+}
+
+export interface BillingInvoiceData {
+  accountName: string;
+  accountEmail: string;
+  companyEmails: { email: string | null; notificationEmail: string | null }[];
+  year: number;
+  month: number;
+  docsTotal: number;
+  basePrice: number;
+  overageDocs: number;
+  overageTotal: number;
+  total: number;
+}
+
+export interface OverduePaymentData {
+  accountName: string;
+  accountEmail: string;
+  companyEmails: { email: string | null; notificationEmail: string | null }[];
+  year: number;
+  month: number;
+  total: number;
+  paidAmount: number;
+  daysSinceDue: number;
+}
+
+/* ────────── Service ────────── */
+
+@Injectable()
+export class NotificationService {
+  private readonly logger = new Logger(NotificationService.name);
+  private transporter: nodemailer.Transporter;
+  private from: string;
+  private isDev: boolean;
+
+  private readonly docTypeLabels: Record<string, string> = {
+    '01': 'Factura',
+    '03': 'Liquidación de Compras',
+    '04': 'Nota de Crédito',
+    '05': 'Nota de Débito',
+    '06': 'Guía de Remisión',
+    '07': 'Retención',
+  };
+
+  constructor(private readonly config: ConfigService) {
+    const host = config.get('SMTP_HOST');
+    this.from = config.get('SMTP_FROM', 'FacturaEC <noreply@facturaec.com>');
+    this.isDev = !host;
+
+    if (host) {
+      this.transporter = nodemailer.createTransport({
+        host,
+        port: Number(config.get('SMTP_PORT', 587)),
+        secure: config.get('SMTP_SECURE', 'false') === 'true',
+        auth: { user: config.get('SMTP_USER'), pass: config.get('SMTP_PASS') },
+      });
+    } else {
+      this.logger.warn('SMTP not configured — notification emails logged to console');
+      this.transporter = nodemailer.createTransport({ jsonTransport: true });
+    }
+  }
+
+  /* ────────── 1. Document Rejected ────────── */
+
+  async sendDocumentRejected(data: DocRejectedData): Promise<void> {
+    const label = this.docTypeLabels[data.docType] || 'Documento';
+    const errorRows = data.errors
+      .map(
+        (e) =>
+          `<tr>
+            <td style="padding:6px 10px;border:1px solid #e9ecef;font-family:monospace;font-size:12px">${e.code}</td>
+            <td style="padding:6px 10px;border:1px solid #e9ecef;font-size:13px">${e.message}</td>
+            <td style="padding:6px 10px;border:1px solid #e9ecef;font-size:12px;color:#666">${e.detail || '—'}</td>
+          </tr>`,
+      )
+      .join('');
+
+    const html = this.wrap(`
+      <h2 style="color:#dc2626;margin-bottom:8px">${label} Rechazada por el SRI</h2>
+      <p style="color:#555;font-size:14px">
+        La ${label.toLowerCase()} <strong>${data.sequential}</strong> de <strong>${data.companyName}</strong> (${data.companyRuc})
+        fue rechazada por el SRI.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr style="background:#fef2f2">
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-weight:600;width:35%">Clave de Acceso</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-size:11px;word-break:break-all">${data.accessKey}</td>
+        </tr>
+      </table>
+      <h3 style="color:#333;font-size:14px;margin-bottom:8px">Errores del SRI:</h3>
+      <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:13px">
+        <tr style="background:#f8f9fa">
+          <th style="padding:6px 10px;border:1px solid #e9ecef;text-align:left">Código</th>
+          <th style="padding:6px 10px;border:1px solid #e9ecef;text-align:left">Mensaje</th>
+          <th style="padding:6px 10px;border:1px solid #e9ecef;text-align:left">Detalle</th>
+        </tr>
+        ${errorRows}
+      </table>
+      <p style="color:#555;font-size:13px">
+        Corrija los errores y reenvíe el documento.
+      </p>
+    `);
+
+    const recipients = this.collectRecipients(data.companyEmail, data.notificationEmail);
+    await this.send(recipients, `[RECHAZADO] ${label} ${data.sequential} — ${data.companyName}`, html);
+  }
+
+  /* ────────── 2 & 3. Certificate Expiry ────────── */
+
+  async sendCertificateExpiry(data: CertExpiryData): Promise<void> {
+    const isExpired = data.expired;
+    const color = isExpired ? '#dc2626' : '#f59e0b';
+    const title = isExpired
+      ? 'Firma Electrónica CADUCADA'
+      : `Firma Electrónica por Caducar (${data.daysLeft} días)`;
+    const urgency = isExpired
+      ? 'Su firma electrónica ya ha caducado. No podrá emitir documentos electrónicos hasta que la renueve.'
+      : `Su firma electrónica caduca en <strong>${data.daysLeft} días</strong> (${data.expiresAt}). Renuévela antes de que caduque para evitar interrupciones.`;
+
+    const html = this.wrap(`
+      <h2 style="color:${color};margin-bottom:8px">${title}</h2>
+      <p style="color:#555;font-size:14px">
+        Empresa: <strong>${data.companyName}</strong> (${data.companyRuc})
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600;width:40%">Titular</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.certSubject || '—'}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Fecha de Vencimiento</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;color:${color};font-weight:600">${data.expiresAt}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Estado</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;color:${color};font-weight:600">${isExpired ? 'CADUCADA' : `Caduca en ${data.daysLeft} días`}</td>
+        </tr>
+      </table>
+      <p style="color:#555;font-size:14px">${urgency}</p>
+    `);
+
+    const subject = isExpired
+      ? `[URGENTE] Firma Electrónica CADUCADA — ${data.companyName}`
+      : `[ALERTA] Firma Electrónica caduca en ${data.daysLeft} días — ${data.companyName}`;
+
+    const recipients = this.collectRecipients(data.companyEmail, data.notificationEmail);
+    await this.send(recipients, subject, html);
+  }
+
+  /* ────────── 4. Document Limit Reached ────────── */
+
+  async sendLimitReached(data: LimitReachedData): Promise<void> {
+    const overageMsg = data.overageEnabled
+      ? 'Tiene habilitado el consumo de <strong>extras</strong>. Los documentos adicionales se facturarán como excedentes según su plan.'
+      : '<strong>No tiene habilitado extras.</strong> No podrá emitir más documentos hasta el siguiente período. Contacte al administrador para habilitar excedentes o cambiar de plan.';
+
+    const html = this.wrap(`
+      <h2 style="color:#f59e0b;margin-bottom:8px">Límite de Documentos Alcanzado</h2>
+      <p style="color:#555;font-size:14px">
+        La empresa <strong>${data.companyName}</strong> (${data.companyRuc}) ha alcanzado su límite mensual de documentos.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600;width:40%">Documentos Usados</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.docsUsed}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Límite del Plan</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.docLimit}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Extras Habilitado</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.overageEnabled ? 'Sí' : 'No'}</td>
+        </tr>
+      </table>
+      <p style="color:#555;font-size:14px">${overageMsg}</p>
+    `);
+
+    const recipients = this.collectRecipients(data.companyEmail, data.notificationEmail);
+    await this.send(recipients, `[ALERTA] Límite de documentos alcanzado — ${data.companyName}`, html);
+  }
+
+  /* ────────── 5. Warning Message Created ────────── */
+
+  async sendWarningMessage(data: WarningMessageData): Promise<void> {
+    const html = this.wrap(`
+      <h2 style="color:#f59e0b;margin-bottom:8px">Mensaje de Advertencia</h2>
+      <p style="color:#555;font-size:14px">
+        Se ha registrado un mensaje de advertencia en la cuenta <strong>${data.accountName}</strong>:
+      </p>
+      <div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:16px;margin:16px 0">
+        <p style="color:#92400e;font-size:14px;margin:0">${data.message}</p>
+      </div>
+      <p style="color:#555;font-size:13px">
+        Si tiene consultas, comuníquese con el administrador de la plataforma.
+      </p>
+    `);
+
+    const recipients = this.collectAccountRecipients(data.accountEmail, data.companyEmails);
+    await this.send(recipients, `[ADVERTENCIA] ${data.accountName} — Mensaje de advertencia`, html);
+  }
+
+  /* ────────── 6. Account Blocked ────────── */
+
+  async sendAccountBlocked(data: AccountBlockedData): Promise<void> {
+    const html = this.wrap(`
+      <h2 style="color:#dc2626;margin-bottom:8px">Cuenta Bloqueada</h2>
+      <p style="color:#555;font-size:14px">
+        La cuenta <strong>${data.accountName}</strong> ha sido <strong style="color:#dc2626">bloqueada</strong>.
+      </p>
+      <p style="color:#555;font-size:14px">
+        Mientras la cuenta esté bloqueada, no se podrán emitir documentos electrónicos.
+      </p>
+      <p style="color:#555;font-size:13px">
+        Para más información, comuníquese con el administrador de la plataforma.
+      </p>
+    `);
+
+    const recipients = this.collectAccountRecipients(data.accountEmail, data.companyEmails);
+    await this.send(recipients, `[BLOQUEADA] Cuenta ${data.accountName} bloqueada`, html);
+  }
+
+  /* ────────── 7. Billing Invoice Generated ────────── */
+
+  async sendBillingInvoice(data: BillingInvoiceData): Promise<void> {
+    const monthNames = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const period = `${monthNames[data.month]} ${data.year}`;
+
+    const html = this.wrap(`
+      <h2 style="color:#1a1a2e;margin-bottom:8px">Factura de Cobro Generada</h2>
+      <p style="color:#555;font-size:14px">
+        Se ha generado la factura de cobro para la cuenta <strong>${data.accountName}</strong>
+        correspondiente al período <strong>${period}</strong>.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600;width:45%">Período</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${period}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Documentos Emitidos</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.docsTotal}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Precio Base</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">$${data.basePrice.toFixed(2)}</td>
+        </tr>
+        ${data.overageDocs > 0 ? `
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Documentos Extra</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.overageDocs}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Total Extras</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">$${data.overageTotal.toFixed(2)}</td>
+        </tr>` : ''}
+        <tr>
+          <td style="padding:8px 12px;background:#1a1a2e;color:#fff;border:1px solid #e9ecef;font-weight:600;font-size:15px">TOTAL</td>
+          <td style="padding:8px 12px;background:#1a1a2e;color:#fff;border:1px solid #e9ecef;font-weight:600;font-size:15px">$${data.total.toFixed(2)}</td>
+        </tr>
+      </table>
+    `);
+
+    const recipients = this.collectAccountRecipients(data.accountEmail, data.companyEmails);
+    await this.send(recipients, `[FACTURA] ${period} — ${data.accountName} — $${data.total.toFixed(2)}`, html);
+  }
+
+  /* ────────── 8. Overdue Payment Reminder ────────── */
+
+  async sendOverduePayment(data: OverduePaymentData): Promise<void> {
+    const monthNames = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const period = `${monthNames[data.month]} ${data.year}`;
+    const pending = data.total - data.paidAmount;
+
+    const html = this.wrap(`
+      <h2 style="color:#dc2626;margin-bottom:8px">Pago Vencido</h2>
+      <p style="color:#555;font-size:14px">
+        La cuenta <strong>${data.accountName}</strong> tiene un pago pendiente correspondiente al período <strong>${period}</strong>.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600;width:45%">Período</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${period}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Total</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">$${data.total.toFixed(2)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Pagado</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">$${data.paidAmount.toFixed(2)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#fef2f2;border:1px solid #e9ecef;font-weight:600;color:#dc2626">Saldo Pendiente</td>
+          <td style="padding:8px 12px;background:#fef2f2;border:1px solid #e9ecef;font-weight:600;color:#dc2626">$${pending.toFixed(2)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Días Vencido</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;color:#dc2626">${data.daysSinceDue} días</td>
+        </tr>
+      </table>
+      <p style="color:#555;font-size:13px">
+        Realice el pago a la brevedad posible para evitar la suspensión del servicio.
+      </p>
+    `);
+
+    const recipients = this.collectAccountRecipients(data.accountEmail, data.companyEmails);
+    await this.send(recipients, `[VENCIDO] Pago pendiente ${period} — ${data.accountName} — $${pending.toFixed(2)}`, html);
+  }
+
+  /* ────────── Helpers ────────── */
+
+  private collectRecipients(companyEmail: string | null, notificationEmail: string | null): string[] {
+    const set = new Set<string>();
+    if (companyEmail) set.add(companyEmail);
+    if (notificationEmail) set.add(notificationEmail);
+    return Array.from(set);
+  }
+
+  private collectAccountRecipients(
+    accountEmail: string,
+    companyEmails: { email: string | null; notificationEmail: string | null }[],
+  ): string[] {
+    const set = new Set<string>();
+    set.add(accountEmail);
+    for (const c of companyEmails) {
+      if (c.email) set.add(c.email);
+      if (c.notificationEmail) set.add(c.notificationEmail);
+    }
+    return Array.from(set);
+  }
+
+  private async send(recipients: string[], subject: string, html: string): Promise<void> {
+    if (recipients.length === 0) {
+      this.logger.warn(`No recipients for notification: ${subject}`);
+      return;
+    }
+
+    try {
+      await this.transporter.sendMail({
+        from: this.from,
+        to: recipients.join(', '),
+        subject,
+        html,
+      });
+
+      if (this.isDev) {
+        this.logger.log(`[DEV EMAIL] To: ${recipients.join(', ')} | Subject: ${subject}`);
+      } else {
+        this.logger.log(`Notification sent to ${recipients.join(', ')}: ${subject}`);
+      }
+    } catch (err: any) {
+      this.logger.error(`Failed to send notification to ${recipients.join(', ')}: ${err.message}`);
+    }
+  }
+
+  private wrap(body: string): string {
+    return `
+      <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
+        ${body}
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+        <p style="color:#aaa;font-size:11px;text-align:center">FacturaEC — Facturación Electrónica Ecuador</p>
+      </div>
+    `;
+  }
+}

@@ -9,6 +9,8 @@ import {
   Query,
   ParseIntPipe,
   DefaultValuePipe,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service';
@@ -89,5 +91,20 @@ export class AccountsController {
     @Param('userId', ParseIntPipe) userId: number,
   ) {
     return this.service.removeUser(accId, userId);
+  }
+
+  // ── Account API Key ──
+
+  @Post(':id/api-key')
+  @ApiOperation({ summary: 'Generar o regenerar API key de cuenta' })
+  generateApiKey(@Param('id', ParseIntPipe) id: number) {
+    return this.service.generateApiKey(id);
+  }
+
+  @Delete(':id/api-key')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Revocar API key de cuenta' })
+  revokeApiKey(@Param('id', ParseIntPipe) id: number) {
+    return this.service.revokeApiKey(id);
   }
 }

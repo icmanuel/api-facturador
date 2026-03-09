@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import { Account } from '../../entities/account.entity';
 import { AccountUser } from '../../entities/account-user.entity';
 import { AccountUserRole } from '../../entities/enums';
@@ -10,6 +11,7 @@ import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateAccountUserDto } from './dto/create-account-user.dto';
 import { UpdateAccountUserDto } from './dto/update-account-user.dto';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
+import { NotificationService } from '../../notifications/notification.service';
 
 @Injectable()
 export class AccountsService {
@@ -18,6 +20,7 @@ export class AccountsService {
     private readonly repo: Repository<Account>,
     @InjectRepository(AccountUser)
     private readonly userRepo: Repository<AccountUser>,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async findAll(
@@ -63,7 +66,10 @@ export class AccountsService {
 
   async create(dto: CreateAccountDto): Promise<Account> {
     const { adminName, adminEmail, adminPassword, ...accountData } = dto;
-    const account = this.repo.create(accountData);
+    const account = this.repo.create({
+      ...accountData,
+      apiKey: 'ak_' + randomBytes(32).toString('hex'),
+    });
     const saved = await this.repo.save(account);
 
     if (adminName && adminEmail && adminPassword) {
@@ -83,8 +89,37 @@ export class AccountsService {
 
   async update(id: number, dto: UpdateAccountDto): Promise<Account> {
     const account = await this.findOne(id);
+    const previousWarning = account.warningMessage;
+    const wasActive = account.isActive;
+
     Object.assign(account, dto);
-    return this.repo.save(account);
+    const saved = await this.repo.save(account);
+
+    // Load companies for notification recipients
+    const companyEmails = (account.companies ?? [])
+      .filter((c) => c.isActive)
+      .map((c) => ({ email: c.email, notificationEmail: c.notificationEmail }));
+
+    // Notification 5: Warning message created
+    if (dto.warningMessage && dto.warningMessage !== previousWarning) {
+      this.notificationService.sendWarningMessage({
+        accountName: account.name,
+        accountEmail: account.email,
+        companyEmails,
+        message: dto.warningMessage,
+      }).catch(() => {});
+    }
+
+    // Notification 6: Account blocked (isActive changed to false)
+    if (dto.isActive === false && wasActive) {
+      this.notificationService.sendAccountBlocked({
+        accountName: account.name,
+        accountEmail: account.email,
+        companyEmails,
+      }).catch(() => {});
+    }
+
+    return saved;
   }
 
   async findUsers(accountId: number): Promise<AccountUser[]> {
@@ -139,5 +174,18 @@ export class AccountsService {
     if (!user) throw new NotFoundException('Usuario no encontrado');
     user.isActive = false;
     return this.userRepo.save(user);
+  }
+
+  async generateApiKey(accountId: number): Promise<{ apiKey: string }> {
+    const account = await this.findOne(accountId);
+    account.apiKey = 'ak_' + randomBytes(32).toString('hex');
+    await this.repo.save(account);
+    return { apiKey: account.apiKey };
+  }
+
+  async revokeApiKey(accountId: number): Promise<void> {
+    const account = await this.findOne(accountId);
+    account.apiKey = null;
+    await this.repo.save(account);
   }
 }

@@ -21,6 +21,7 @@ import { XmlParserService, ParsedXmlMetadata } from '../../engine/xml/xml-parser
 import { CreateXmlDocumentDto } from './dto/create-xml-document.dto';
 import { DOCUMENT_QUEUE } from '../../queues/queues.constants';
 import { formatDateTz } from '../../common/utils/date.util';
+import { NotificationService } from '../../notifications/notification.service';
 
 const CORRECTABLE_STATES: DocStatus[] = [DocStatus.CREATED, DocStatus.REJECTED, DocStatus.FAILED];
 
@@ -47,6 +48,7 @@ export class XmlDocumentsService {
     private readonly documentQueue: Queue,
     private readonly processingService: DocumentProcessingService,
     private readonly xmlParserService: XmlParserService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   // ── Create (async) ──
@@ -341,6 +343,18 @@ export class XmlDocumentsService {
       .andWhere('d.createdAt >= :start', { start: startOfMonth })
       .andWhere('d.createdAt < :end', { end: endOfMonth })
       .getCount();
+
+    if (monthCount === plan.docLimit) {
+      this.notificationService.sendLimitReached({
+        companyName: company.name,
+        companyRuc: company.ruc,
+        companyEmail: company.email,
+        notificationEmail: company.notificationEmail,
+        docLimit: plan.docLimit,
+        docsUsed: monthCount,
+        overageEnabled: company.overageEnabled,
+      }).catch(() => {});
+    }
 
     if (monthCount >= plan.docLimit && !company.overageEnabled) {
       throw new ForbiddenException(

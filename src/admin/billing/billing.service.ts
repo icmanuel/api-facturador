@@ -3,9 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { BillingPeriod } from '../../entities/billing-period.entity';
 import { Payment } from '../../entities/payment.entity';
+import { Account } from '../../entities/account.entity';
 import { BillingStatus, PlanTier } from '../../entities/enums';
 import { PaginatedResult } from '../../common/dto/pagination.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { NotificationService } from '../../notifications/notification.service';
 
 @Injectable()
 export class BillingService {
@@ -16,7 +18,10 @@ export class BillingService {
     private readonly repo: Repository<BillingPeriod>,
     @InjectRepository(Payment)
     private readonly paymentRepo: Repository<Payment>,
+    @InjectRepository(Account)
+    private readonly accountRepo: Repository<Account>,
     private readonly dataSource: DataSource,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async findAll(
@@ -270,6 +275,12 @@ export class BillingService {
 
       await this.repo.save(bp);
       created++;
+
+      // Notification 7: billing invoice generated (only for non-zero totals)
+      if (total > 0) {
+        this.sendBillingNotification(accId, year, month, totalDocs, totalBase, totalOverageDocs, totalOverageAmount, total)
+          .catch(() => {});
+      }
     }
 
     this.logger.log(`Billing periods generated for ${year}-${String(month).padStart(2, '0')}: ${created} created, ${skipped} skipped`);
@@ -375,5 +386,28 @@ export class BillingService {
     if (paidAmount >= total * 0.999) return BillingStatus.PAID;
     if (paidAmount > 0) return BillingStatus.PARTIAL;
     return BillingStatus.PENDING;
+  }
+
+  private async sendBillingNotification(
+    accountId: number, year: number, month: number,
+    docsTotal: number, basePrice: number,
+    overageDocs: number, overageTotal: number, total: number,
+  ) {
+    const account = await this.accountRepo.findOne({
+      where: { id: accountId },
+      relations: ['companies'],
+    });
+    if (!account) return;
+
+    const companyEmails = (account.companies ?? [])
+      .filter((c) => c.isActive)
+      .map((c) => ({ email: c.email, notificationEmail: c.notificationEmail }));
+
+    await this.notificationService.sendBillingInvoice({
+      accountName: account.name,
+      accountEmail: account.email,
+      companyEmails,
+      year, month, docsTotal, basePrice, overageDocs, overageTotal, total,
+    });
   }
 }

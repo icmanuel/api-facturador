@@ -78,6 +78,9 @@ export class Company {
   @Column({ name: 'com_notify_company', default: true })
   notifyCompany: boolean;
 
+  @Column({ name: 'com_notification_email', type: 'varchar', length: 254, nullable: true })
+  notificationEmail: string | null;
+
   @Column({ name: 'com_logo_s3_key', length: 500, nullable: true })
   logoS3Key: string;
 

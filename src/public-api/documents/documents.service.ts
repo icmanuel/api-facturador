@@ -23,6 +23,7 @@ import { S3StorageService } from '../../engine/storage/s3.service';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { DOCUMENT_QUEUE } from '../../queues/queues.constants';
 import { formatDateTz } from '../../common/utils/date.util';
+import { NotificationService } from '../../notifications/notification.service';
 
 /** States where a document can be corrected and reprocessed */
 const CORRECTABLE_STATES: DocStatus[] = [DocStatus.CREATED, DocStatus.REJECTED, DocStatus.FAILED];
@@ -52,6 +53,7 @@ export class PublicDocumentsService {
     private readonly accessKeyService: AccessKeyService,
     private readonly processingService: DocumentProcessingService,
     private readonly s3Service: S3StorageService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -771,6 +773,19 @@ export class PublicDocumentsService {
       .andWhere('d.createdAt >= :start', { start: startOfMonth })
       .andWhere('d.createdAt < :end', { end: endOfMonth })
       .getCount();
+
+    // Notification 4: limit reached (send once when exactly at limit)
+    if (monthCount === plan.docLimit) {
+      this.notificationService.sendLimitReached({
+        companyName: company.name,
+        companyRuc: company.ruc,
+        companyEmail: company.email,
+        notificationEmail: company.notificationEmail,
+        docLimit: plan.docLimit,
+        docsUsed: monthCount,
+        overageEnabled: company.overageEnabled,
+      }).catch(() => {});
+    }
 
     if (monthCount >= plan.docLimit && !company.overageEnabled) {
       throw new ForbiddenException(

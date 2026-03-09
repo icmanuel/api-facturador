@@ -4,6 +4,7 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { Public } from '../common/decorators/public.decorator';
 
 @ApiTags('Auth')
@@ -23,6 +24,20 @@ export class AuthController {
   @ApiOperation({ summary: 'Login como usuario de cuenta' })
   loginClient(@Body() dto: LoginDto) {
     return this.authService.loginClient(dto.email, dto.password);
+  }
+
+  @Public()
+  @Post('refresh')
+  @ApiOperation({ summary: 'Renovar access token con refresh token' })
+  refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refresh(dto.refreshToken);
+  }
+
+  @Public()
+  @Post('logout')
+  @ApiOperation({ summary: 'Cerrar sesión (invalidar refresh token)' })
+  logout(@Body() dto: RefreshTokenDto) {
+    return this.authService.logout(dto.refreshToken);
   }
 
   @Public()

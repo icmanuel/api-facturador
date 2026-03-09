@@ -7,6 +7,7 @@ import * as bcrypt from 'bcrypt';
 import { PlatformAdmin } from '../entities/platform-admin.entity';
 import { AccountUser } from '../entities/account-user.entity';
 import { MailService } from '../common/services/mail.service';
+import { RefreshTokenService } from './refresh-token.service';
 
 @Injectable()
 export class AuthService {
@@ -20,6 +21,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly mailService: MailService,
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   async loginAdmin(email: string, password: string) {
@@ -37,9 +39,12 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    const payload = { sub: admin.id, email: admin.email, role: 'platform_admin' };
+    const payload = { sub: admin.id, email: admin.email, role: 'platform_admin' as const };
+    const refreshToken = await this.refreshTokenService.create(admin.id, 'platform_admin');
+
     return {
       accessToken: this.jwtService.sign(payload),
+      refreshToken,
       user: { id: admin.id, name: admin.name, email: admin.email, role: 'platform_admin' },
     };
   }
@@ -66,8 +71,11 @@ export class AuthService {
       accountId: user.accountId,
     };
 
+    const refreshToken = await this.refreshTokenService.create(user.id, 'account_user', user.accountId);
+
     return {
       accessToken: this.jwtService.sign(payload),
+      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -76,6 +84,63 @@ export class AuthService {
         accountId: user.accountId,
       },
     };
+  }
+
+  /**
+   * Issue a new access token + refresh token from a valid refresh token.
+   */
+  async refresh(oldRefreshToken: string) {
+    const data = await this.refreshTokenService.consume(oldRefreshToken);
+    if (!data) {
+      throw new UnauthorizedException('Refresh token inválido o expirado');
+    }
+
+    // Build JWT payload based on role
+    if (data.role === 'platform_admin') {
+      const admin = await this.adminRepo.findOne({ where: { id: data.userId, isActive: true } });
+      if (!admin) throw new UnauthorizedException('Usuario no encontrado o desactivado');
+
+      const payload = { sub: admin.id, email: admin.email, role: 'platform_admin' as const };
+      const newRefreshToken = await this.refreshTokenService.create(admin.id, 'platform_admin');
+
+      return {
+        accessToken: this.jwtService.sign(payload),
+        refreshToken: newRefreshToken,
+        user: { id: admin.id, name: admin.name, email: admin.email, role: 'platform_admin' },
+      };
+    }
+
+    // account_user
+    const user = await this.accountUserRepo.findOne({ where: { id: data.userId, isActive: true } });
+    if (!user) throw new UnauthorizedException('Usuario no encontrado o desactivado');
+
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: 'account_user' as const,
+      accountId: user.accountId,
+    };
+    const newRefreshToken = await this.refreshTokenService.create(user.id, 'account_user', user.accountId);
+
+    return {
+      accessToken: this.jwtService.sign(payload),
+      refreshToken: newRefreshToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        accountId: user.accountId,
+      },
+    };
+  }
+
+  /**
+   * Revoke a refresh token (logout).
+   */
+  async logout(refreshToken: string): Promise<{ message: string }> {
+    await this.refreshTokenService.revoke(refreshToken);
+    return { message: 'Sesión cerrada correctamente' };
   }
 
   /**

@@ -18,6 +18,7 @@ import { CryptoService } from '../../common/services/crypto.service';
 import { MailService } from '../../common/services/mail.service';
 import { classifySriMessages, SriErrorAction } from '../sri/sri-errors';
 import { EventsGateway } from '../../events/events.gateway';
+import { NotificationService } from '../../notifications/notification.service';
 
 export interface ProcessingResult {
   status: 'authorized' | 'rejected' | 'failed' | 'processing';
@@ -50,6 +51,7 @@ export class DocumentProcessingService {
     private readonly cryptoService: CryptoService,
     private readonly mailService: MailService,
     private readonly eventsGateway: EventsGateway,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -189,6 +191,7 @@ export class DocumentProcessingService {
               status: DocStatus.REJECTED, retries: doc.retries + 1, processingTimeMs: Date.now() - startTime,
             });
             this.emitStatusChange(doc, 'REJECTED');
+      this.sendRejectionNotification(doc, collectedErrors);
             return { status: 'rejected', errors: collectedErrors, processingTimeMs: Date.now() - startTime };
           }
           // SRI knows about it (state != UNKNOWN) — skip reception, go to auth check
@@ -264,6 +267,7 @@ export class DocumentProcessingService {
                 status: DocStatus.REJECTED, retries: doc.retries + 1, processingTimeMs: Date.now() - startTime,
               });
               this.emitStatusChange(doc, 'REJECTED');
+      this.sendRejectionNotification(doc, collectedErrors);
               return { status: 'rejected', errors: collectedErrors, processingTimeMs: Date.now() - startTime };
             }
 
@@ -419,6 +423,7 @@ export class DocumentProcessingService {
       });
 
       this.emitStatusChange(doc, 'REJECTED');
+      this.sendRejectionNotification(doc, collectedErrors);
 
       return {
         status: 'rejected',
@@ -510,6 +515,7 @@ export class DocumentProcessingService {
       });
 
       this.emitStatusChange(doc, 'REJECTED');
+      this.sendRejectionNotification(doc, collectedErrors);
 
       return {
         status: 'rejected',
@@ -628,6 +634,7 @@ export class DocumentProcessingService {
       status: DocStatus.REJECTED, retries: doc.retries + 1, processingTimeMs: Date.now() - startTime,
     });
     this.emitStatusChange(doc, 'REJECTED');
+      this.sendRejectionNotification(doc, collectedErrors);
     return { status: 'rejected', errors: collectedErrors, processingTimeMs: Date.now() - startTime };
   }
 
@@ -1519,6 +1526,24 @@ export class DocumentProcessingService {
     } catch (err: any) {
       this.logger.warn(`Failed to emit WS event for doc ${doc.id}: ${err.message}`);
     }
+  }
+
+  private sendRejectionNotification(
+    doc: Document,
+    errors: { code: string; message: string; detail?: string }[],
+  ) {
+    const company = doc.company;
+    if (!company) return;
+    this.notificationService.sendDocumentRejected({
+      companyName: company.name,
+      companyRuc: company.ruc,
+      companyEmail: company.email,
+      notificationEmail: company.notificationEmail,
+      docType: doc.typeCode,
+      sequential: doc.sequential,
+      accessKey: doc.accessKey,
+      errors,
+    }).catch((err) => this.logger.warn(`Rejection notification failed for doc ${doc.id}: ${err.message}`));
   }
 
   /**

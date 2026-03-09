@@ -3,17 +3,25 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { randomBytes } from 'crypto';
 import { Company } from '../../entities/company.entity';
+import { SubscriptionPlan } from '../../entities/subscription-plan.entity';
+import { PlanTier } from '../../entities/enums';
 import { EmissionPoint } from '../../entities/emission-point.entity';
 import { CompanySeries } from '../../entities/company-series.entity';
+import { CompanyDocType } from '../../entities/company-doc-type.entity';
 import { S3StorageService } from '../../engine/storage/s3.service';
+import { CertificatesService } from '../../admin/certificates/certificates.service';
+import { CreateClientCompanyDto } from './dto/create-client-company.dto';
 import { UpdateClientCompanyDto } from './dto/update-client-company.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
 import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
 import { SetSequentialDto } from '../../admin/companies/dto/set-sequential.dto';
+import { SriDocTypeCode } from '../../entities/enums';
 
 @Injectable()
 export class ClientCompaniesService {
@@ -24,8 +32,13 @@ export class ClientCompaniesService {
     private readonly emissionPointRepo: Repository<EmissionPoint>,
     @InjectRepository(CompanySeries)
     private readonly companySeriesRepo: Repository<CompanySeries>,
+    @InjectRepository(CompanyDocType)
+    private readonly companyDocTypeRepo: Repository<CompanyDocType>,
+    @InjectRepository(SubscriptionPlan)
+    private readonly planRepo: Repository<SubscriptionPlan>,
     private readonly dataSource: DataSource,
     private readonly s3Service: S3StorageService,
+    private readonly certificatesService: CertificatesService,
   ) {}
 
   async findAll(accountId: number) {
@@ -50,6 +63,39 @@ export class ClientCompaniesService {
     }
 
     return company;
+  }
+
+  async create(accountId: number, dto: CreateClientCompanyDto): Promise<Company> {
+    // Validate plan exists and is not restricted
+    const plan = await this.planRepo.findOne({ where: { id: dto.planId } });
+    if (!plan) {
+      throw new BadRequestException('Plan no encontrado');
+    }
+    const restrictedTiers: PlanTier[] = [PlanTier.UNLIMITED, PlanTier.CUSTOM];
+    if (restrictedTiers.includes(plan.tier)) {
+      throw new BadRequestException(
+        `El plan "${plan.name}" (${plan.tier}) solo puede ser asignado por un administrador`,
+      );
+    }
+    if (!plan.isActive) {
+      throw new BadRequestException('El plan seleccionado no está disponible');
+    }
+
+    const exists = await this.companyRepo.findOne({ where: { ruc: dto.ruc } });
+    if (exists) {
+      throw new ConflictException(`Ya existe una empresa con RUC ${dto.ruc}`);
+    }
+
+    const apiKey = 'sk_' + randomBytes(32).toString('hex');
+
+    const company = this.companyRepo.create({
+      ...dto,
+      accountId,
+      apiKey,
+      billingStartDate: dto.billingStartDate ?? new Date().toISOString().slice(0, 10),
+    });
+
+    return this.companyRepo.save(company);
   }
 
   async update(
@@ -92,6 +138,40 @@ export class ClientCompaniesService {
 
   async downloadLogo(s3Key: string): Promise<Buffer> {
     return this.s3Service.download(s3Key);
+  }
+
+  // ── Doc Types ──
+
+  async setDocTypes(
+    accountId: number,
+    companyId: number,
+    codes: SriDocTypeCode[],
+  ): Promise<CompanyDocType[]> {
+    const company = await this.findOne(accountId, companyId);
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.delete(CompanyDocType, { companyId: company.id });
+
+      const docTypes = codes.map((code) =>
+        manager.create(CompanyDocType, { companyId: company.id, code }),
+      );
+
+      return manager.save(CompanyDocType, docTypes);
+    });
+  }
+
+  // ── Certificates ──
+
+  async uploadCertificate(
+    accountId: number,
+    companyId: number,
+    fileBuffer: Buffer,
+    fileName: string,
+    password: string,
+    uploadedBy: number | null,
+  ) {
+    const company = await this.findOne(accountId, companyId);
+    return this.certificatesService.upload(company.id, fileBuffer, fileName, password, uploadedBy);
   }
 
   // ── Emission Points ──

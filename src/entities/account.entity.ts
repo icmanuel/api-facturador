@@ -40,6 +40,9 @@ export class Account {
   @Column({ name: 'acc_warning_message', type: 'text', nullable: true })
   warningMessage: string | null;
 
+  @Column({ name: 'acc_api_key', type: 'varchar', length: 100, unique: true, nullable: true })
+  apiKey: string | null;
+
   @Column({ name: 'acc_is_active', default: true })
   isActive: boolean;
 
