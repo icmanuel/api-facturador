@@ -29,7 +29,9 @@ jobs:
 
       - name: Deploy to server
         run: |
-          rsync -avz --delete \
+          rsync -avz \
+            --exclude node_modules \
+            --exclude .env \
             -e "ssh -i ~/.ssh/deploy_key" \
             dist/ package.json package-lock.json \
             root@${{ secrets.SERVER_HOST }}:/root/autorizadorec/api/
@@ -38,6 +40,6 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_HOST }} << 'EOF'
             cd /root/autorizadorec/api
-            npm install --production
+            npm install --omit=dev
             pm2 restart autorizadorec-api
           EOF
