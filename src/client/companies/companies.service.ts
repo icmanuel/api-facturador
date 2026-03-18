@@ -132,6 +132,13 @@ export class ClientCompaniesService {
     return this.companyRepo.save(company);
   }
 
+  async regenerateApiKey(accountId: number, companyId: number) {
+    await this.findOne(accountId, companyId); // validates ownership
+    const apiKey = 'sk_' + randomBytes(32).toString('hex');
+    await this.companyRepo.update(companyId, { apiKey });
+    return { apiKey };
+  }
+
   async uploadLogo(accountId: number, companyId: number, buffer: Buffer, mimeType: string) {
     const company = await this.findOne(accountId, companyId);
 

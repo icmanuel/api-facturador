@@ -1,17 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { randomBytes } from 'crypto';
 import { Company } from '../../entities/company.entity';
 import { Certificate } from '../../entities/certificate.entity';
 import { Document } from '../../entities/document.entity';
+import { CertificatesService } from '../../admin/certificates/certificates.service';
+import { CompanyEnv } from '../../entities/enums';
+import { UpdateSettingsDto } from './dto/update-settings.dto';
 
 @Injectable()
 export class InfoService {
   constructor(
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
     @InjectRepository(Certificate)
     private readonly certRepo: Repository<Certificate>,
     @InjectRepository(Document)
     private readonly docRepo: Repository<Document>,
+    private readonly certificatesService: CertificatesService,
   ) {}
 
   getCompanyInfo(company: Company) {
@@ -62,25 +69,26 @@ export class InfoService {
     };
   }
 
+  /** Free test documents per month for all plans */
+  static readonly TEST_DOC_LIMIT = 50;
+
   async getUsageInfo(company: Company) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    const docsThisMonth = await this.docRepo
-      .createQueryBuilder('d')
-      .where('d.companyId = :companyId', { companyId: company.id })
-      .andWhere('d.createdAt >= :start', { start: startOfMonth })
-      .andWhere('d.createdAt < :end', { end: endOfMonth })
-      .getCount();
+    const baseQuery = () =>
+      this.docRepo
+        .createQueryBuilder('d')
+        .where('d.companyId = :companyId', { companyId: company.id })
+        .andWhere('d.createdAt >= :start', { start: startOfMonth })
+        .andWhere('d.createdAt < :end', { end: endOfMonth });
 
-    const authorizedThisMonth = await this.docRepo
-      .createQueryBuilder('d')
-      .where('d.companyId = :companyId', { companyId: company.id })
-      .andWhere('d.createdAt >= :start', { start: startOfMonth })
-      .andWhere('d.createdAt < :end', { end: endOfMonth })
-      .andWhere('d.status = :status', { status: 'AUTHORIZED' })
-      .getCount();
+    const [prodTotal, prodAuthorized, testTotal] = await Promise.all([
+      baseQuery().andWhere('d.env = :env', { env: 'production' }).getCount(),
+      baseQuery().andWhere('d.env = :env', { env: 'production' }).andWhere('d.status = :status', { status: 'AUTHORIZED' }).getCount(),
+      baseQuery().andWhere('d.env = :env', { env: 'test' }).getCount(),
+    ]);
 
     const plan = company.plan;
     const docLimit = plan?.docLimit ?? null;
@@ -91,17 +99,58 @@ export class InfoService {
         year: now.getFullYear(),
         month: now.getMonth() + 1,
       },
-      docsTotal: docsThisMonth,
-      docsAuthorized: authorizedThisMonth,
+      production: {
+        docsTotal: prodTotal,
+        docsAuthorized: prodAuthorized,
+        remaining: docLimit ? Math.max(0, docLimit - prodTotal) : null,
+        overLimit: docLimit ? prodTotal > docLimit : false,
+        overageDocs: docLimit ? Math.max(0, prodTotal - docLimit) : 0,
+      },
+      test: {
+        docsTotal: testTotal,
+        limit: InfoService.TEST_DOC_LIMIT,
+        remaining: Math.max(0, InfoService.TEST_DOC_LIMIT - testTotal),
+      },
       plan: plan ? {
         name: plan.name,
         tier: plan.tier,
         docLimit,
         overageEnabled,
       } : null,
-      remaining: docLimit ? Math.max(0, docLimit - docsThisMonth) : null,
-      overLimit: docLimit ? docsThisMonth > docLimit : false,
-      overageDocs: docLimit ? Math.max(0, docsThisMonth - docLimit) : 0,
     };
+  }
+
+  // ── Self-management methods ──
+
+  async updateEnvironment(companyId: number, env: CompanyEnv) {
+    await this.companyRepo.update(companyId, { env });
+    return { environment: env };
+  }
+
+  async updateSettings(companyId: number, dto: UpdateSettingsDto) {
+    await this.companyRepo.update(companyId, dto as any);
+    const company = await this.companyRepo.findOneByOrFail({ id: companyId });
+    return {
+      webhookUrl: company.webhookUrl,
+      webhookSecret: company.webhookSecret ? '••••••' : null,
+      notifyClient: company.notifyClient,
+      notifyCompany: company.notifyCompany,
+      notificationEmail: company.notificationEmail,
+    };
+  }
+
+  async uploadCertificate(
+    companyId: number,
+    fileBuffer: Buffer,
+    fileName: string,
+    password: string,
+  ) {
+    return this.certificatesService.upload(companyId, fileBuffer, fileName, password, null);
+  }
+
+  async regenerateApiKey(companyId: number) {
+    const apiKey = 'sk_' + randomBytes(32).toString('hex');
+    await this.companyRepo.update(companyId, { apiKey });
+    return { apiKey };
   }
 }

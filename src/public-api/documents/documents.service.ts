@@ -757,37 +757,63 @@ export class PublicDocumentsService {
     }
   }
 
+  /** Free test documents per month for all plans (after trial) */
+  static readonly TEST_DOC_LIMIT = 50;
+
   private async checkPlanLimits(company: Company) {
     if (!company.plan) return;
-
-    const plan = company.plan;
-    if (!plan.docLimit) return; // Unlimited or no limit
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    const monthCount = await this.docRepo
+    const isTestEnv = company.env === 'test';
+
+    if (isTestEnv) {
+      // Test environment: 50 free docs/month for all plans
+      const testCount = await this.docRepo
+        .createQueryBuilder('d')
+        .where('d.companyId = :companyId', { companyId: company.id })
+        .andWhere('d.createdAt >= :start', { start: startOfMonth })
+        .andWhere('d.createdAt < :end', { end: endOfMonth })
+        .andWhere('d.env = :env', { env: 'test' })
+        .getCount();
+
+      if (testCount >= PublicDocumentsService.TEST_DOC_LIMIT) {
+        throw new ForbiddenException(
+          `Límite de documentos de prueba alcanzado (${PublicDocumentsService.TEST_DOC_LIMIT}/mes). ` +
+          `Los documentos en ambiente de pruebas tienen un límite de ${PublicDocumentsService.TEST_DOC_LIMIT} por mes.`,
+        );
+      }
+      return; // Test docs don't consume plan limit
+    }
+
+    // Production environment: check plan limit
+    const plan = company.plan;
+    if (!plan.docLimit) return; // Unlimited or no limit
+
+    const prodCount = await this.docRepo
       .createQueryBuilder('d')
       .where('d.companyId = :companyId', { companyId: company.id })
       .andWhere('d.createdAt >= :start', { start: startOfMonth })
       .andWhere('d.createdAt < :end', { end: endOfMonth })
+      .andWhere('d.env = :env', { env: 'production' })
       .getCount();
 
     // Notification 4: limit reached (send once when exactly at limit)
-    if (monthCount === plan.docLimit) {
+    if (prodCount === plan.docLimit) {
       this.notificationService.sendLimitReached({
         companyName: company.name,
         companyRuc: company.ruc,
         companyEmail: company.email,
         notificationEmail: company.notificationEmail,
         docLimit: plan.docLimit,
-        docsUsed: monthCount,
+        docsUsed: prodCount,
         overageEnabled: company.overageEnabled,
       }).catch(() => {});
     }
 
-    if (monthCount >= plan.docLimit && !company.overageEnabled) {
+    if (prodCount >= plan.docLimit && !company.overageEnabled) {
       throw new ForbiddenException(
         `Límite de documentos alcanzado (${plan.docLimit}/mes). ` +
         `Contacte al administrador para habilitar excedentes o cambiar de plan.`,

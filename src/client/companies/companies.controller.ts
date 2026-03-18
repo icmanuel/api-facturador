@@ -173,6 +173,17 @@ export class ClientCompaniesController {
     );
   }
 
+  // ── API Key ──
+
+  @Post(':id/regenerate-key')
+  @ApiOperation({ summary: 'Regenerar API Key de la empresa (invalida la anterior)' })
+  regenerateApiKey(
+    @CurrentUser('accountId') accountId: number,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.companiesService.regenerateApiKey(accountId, id);
+  }
+
   // ── Emission Points ──
 
   @Post(':id/emission-points')
