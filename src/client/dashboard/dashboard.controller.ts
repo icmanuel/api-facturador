@@ -10,12 +10,20 @@ export class ClientDashboardController {
   constructor(private readonly dashboardService: ClientDashboardService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Dashboard del cliente' })
+  @ApiOperation({ summary: 'Dashboard por empresa' })
   @ApiQuery({ name: 'companyId', required: true, type: Number })
   getDashboard(
     @CurrentUser('accountId') accountId: number,
     @Query('companyId', ParseIntPipe) companyId: number,
   ) {
     return this.dashboardService.getDashboard(accountId, companyId);
+  }
+
+  @Get('account')
+  @ApiOperation({ summary: 'Dashboard consolidado de cuenta multi-empresa' })
+  getAccountDashboard(
+    @CurrentUser('accountId') accountId: number,
+  ) {
+    return this.dashboardService.getAccountDashboard(accountId);
   }
 }

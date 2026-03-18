@@ -6,11 +6,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Not, In, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Company } from '../../entities/company.entity';
+import { Account } from '../../entities/account.entity';
 import { SubscriptionPlan } from '../../entities/subscription-plan.entity';
-import { PlanTier } from '../../entities/enums';
+import { PlanTier, AccountType } from '../../entities/enums';
 import { EmissionPoint } from '../../entities/emission-point.entity';
 import { CompanySeries } from '../../entities/company-series.entity';
 import { CompanyDocType } from '../../entities/company-doc-type.entity';
@@ -36,6 +37,8 @@ export class ClientCompaniesService {
     private readonly companyDocTypeRepo: Repository<CompanyDocType>,
     @InjectRepository(SubscriptionPlan)
     private readonly planRepo: Repository<SubscriptionPlan>,
+    @InjectRepository(Account)
+    private readonly accountRepo: Repository<Account>,
     private readonly dataSource: DataSource,
     private readonly s3Service: S3StorageService,
     private readonly certificatesService: CertificatesService,
@@ -65,7 +68,28 @@ export class ClientCompaniesService {
     return company;
   }
 
+  async getAvailablePlans(): Promise<SubscriptionPlan[]> {
+    return this.planRepo.find({
+      where: {
+        isActive: true,
+        tier: Not(In([PlanTier.UNLIMITED, PlanTier.CUSTOM])),
+      },
+      order: { monthlyPrice: 'ASC' },
+    });
+  }
+
   async create(accountId: number, dto: CreateClientCompanyDto): Promise<Company> {
+    // Only multi-company accounts can create companies
+    const account = await this.accountRepo.findOne({ where: { id: accountId } });
+    if (!account) {
+      throw new NotFoundException('Cuenta no encontrada');
+    }
+    if (account.type !== AccountType.MULTI) {
+      throw new ForbiddenException(
+        'Las cuentas de empresa única no pueden crear empresas adicionales. Contacte soporte para actualizar a multi-empresa.',
+      );
+    }
+
     // Validate plan exists and is not restricted
     const plan = await this.planRepo.findOne({ where: { id: dto.planId } });
     if (!plan) {

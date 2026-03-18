@@ -41,6 +41,12 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 export class ClientCompaniesController {
   constructor(private readonly companiesService: ClientCompaniesService) {}
 
+  @Get('plans/available')
+  @ApiOperation({ summary: 'Planes disponibles para auto-asignar' })
+  getAvailablePlans() {
+    return this.companiesService.getAvailablePlans();
+  }
+
   @Get()
   @ApiOperation({ summary: 'Listar empresas de la cuenta' })
   findAll(@CurrentUser('accountId') accountId: number) {
