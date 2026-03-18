@@ -1,7 +1,8 @@
 import { OmitType, PartialType } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsString, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsOptional, IsString, ValidateIf } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { CreateAccountDto } from './create-account.dto';
+import { AccountStatus } from '../../../entities/enums';
 
 export class UpdateAccountDto extends PartialType(
   OmitType(CreateAccountDto, ['adminName', 'adminEmail', 'adminPassword', 'warningMessage'] as const),
@@ -10,6 +11,11 @@ export class UpdateAccountDto extends PartialType(
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ description: 'Estado de la cuenta', enum: AccountStatus })
+  @IsOptional()
+  @IsEnum(AccountStatus)
+  status?: AccountStatus;
 
   @ApiPropertyOptional({ description: 'Mensaje de advertencia (null para eliminar)', nullable: true })
   @ValidateIf((_, value) => value !== null)

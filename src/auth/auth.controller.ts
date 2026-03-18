@@ -2,6 +2,7 @@ import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -24,6 +25,13 @@ export class AuthController {
   @ApiOperation({ summary: 'Login como usuario de cuenta' })
   loginClient(@Body() dto: LoginDto) {
     return this.authService.loginClient(dto.email, dto.password);
+  }
+
+  @Public()
+  @Post('register')
+  @ApiOperation({ summary: 'Registro público de nueva cuenta (trial 5 días)' })
+  register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
   }
 
   @Public()

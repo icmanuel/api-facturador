@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Company } from '../../entities/company.entity';
-import { CompanyStatus } from '../../entities/enums';
+import { CompanyStatus, AccountStatus } from '../../entities/enums';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -38,6 +38,26 @@ export class ApiKeyGuard implements CanActivate {
 
     if (company.status === CompanyStatus.SUSPENDED) {
       throw new UnauthorizedException('Empresa suspendida. Contacte al administrador.');
+    }
+
+    // Check account-level trial/block status
+    const account = company.account;
+    if (account) {
+      if (account.status === AccountStatus.BLOCKED) {
+        throw new UnauthorizedException('Cuenta bloqueada. Contacte al administrador.');
+      }
+      if (account.status === AccountStatus.SUSPENDED) {
+        throw new UnauthorizedException('Cuenta suspendida. Contacte al administrador.');
+      }
+      if (
+        account.status === AccountStatus.TRIAL &&
+        account.trialEndsAt &&
+        new Date() > account.trialEndsAt
+      ) {
+        throw new UnauthorizedException(
+          'Su periodo de prueba de 5 días ha expirado. Contacte al equipo de AutorizadorEC para activar su cuenta.',
+        );
+      }
     }
 
     // Attach company to request for downstream use

@@ -5,7 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { Account } from '../../entities/account.entity';
 import { AccountUser } from '../../entities/account-user.entity';
-import { AccountUserRole } from '../../entities/enums';
+import { AccountUserRole, AccountStatus } from '../../entities/enums';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateAccountUserDto } from './dto/create-account-user.dto';
@@ -187,5 +187,13 @@ export class AccountsService {
     const account = await this.findOne(accountId);
     account.apiKey = null;
     await this.repo.save(account);
+  }
+
+  async activate(accountId: number): Promise<Account> {
+    const account = await this.repo.findOne({ where: { id: accountId } });
+    if (!account) throw new NotFoundException('Cuenta no encontrada');
+    account.status = AccountStatus.ACTIVE;
+    account.trialEndsAt = null;
+    return this.repo.save(account);
   }
 }

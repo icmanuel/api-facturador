@@ -8,15 +8,19 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { AccountStatusGuard } from '../common/guards/account-status.guard';
 import { MailService } from '../common/services/mail.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { PlatformAdmin } from '../entities/platform-admin.entity';
 import { AccountUser } from '../entities/account-user.entity';
+import { Account } from '../entities/account.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([PlatformAdmin, AccountUser]),
+    TypeOrmModule.forFeature([PlatformAdmin, AccountUser, Account]),
+    NotificationsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -34,6 +38,7 @@ import { AccountUser } from '../entities/account-user.entity';
     RefreshTokenService,
     JwtStrategy,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: AccountStatusGuard },
   ],
   exports: [AuthService],
 })

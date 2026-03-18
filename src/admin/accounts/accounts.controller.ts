@@ -93,6 +93,14 @@ export class AccountsController {
     return this.service.removeUser(accId, userId);
   }
 
+  // ── Account Activation ──
+
+  @Post(':id/activate')
+  @ApiOperation({ summary: 'Activar cuenta (convertir de trial a activa)' })
+  activate(@Param('id', ParseIntPipe) id: number) {
+    return this.service.activate(id);
+  }
+
   // ── Account API Key ──
 
   @Post(':id/api-key')

@@ -1,13 +1,18 @@
-import { Injectable, UnauthorizedException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import { PlatformAdmin } from '../entities/platform-admin.entity';
 import { AccountUser } from '../entities/account-user.entity';
+import { Account } from '../entities/account.entity';
+import { AccountType, AccountStatus, AccountUserRole } from '../entities/enums';
 import { MailService } from '../common/services/mail.service';
+import { NotificationService } from '../notifications/notification.service';
 import { RefreshTokenService } from './refresh-token.service';
+import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -18,9 +23,12 @@ export class AuthService {
     private readonly adminRepo: Repository<PlatformAdmin>,
     @InjectRepository(AccountUser)
     private readonly accountUserRepo: Repository<AccountUser>,
+    @InjectRepository(Account)
+    private readonly accountRepo: Repository<Account>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly mailService: MailService,
+    private readonly notificationService: NotificationService,
     private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
@@ -216,6 +224,90 @@ export class AuthService {
 
     this.logger.log(`Password reset completed for ${payload.email}`);
     return { message: 'Contraseña actualizada correctamente. Ya puedes iniciar sesión.' };
+  }
+
+  /**
+   * Public self-registration — creates account + admin user with 5-day trial.
+   */
+  async register(dto: RegisterDto) {
+    // Check RUC uniqueness
+    const existingAccount = await this.accountRepo.findOne({ where: { ruc: dto.ruc } });
+    if (existingAccount) {
+      throw new ConflictException('Ya existe una cuenta registrada con este RUC.');
+    }
+
+    // Check email uniqueness
+    const existingUser = await this.accountUserRepo.findOne({ where: { email: dto.email } });
+    if (existingUser) {
+      throw new ConflictException('Ya existe un usuario registrado con este correo.');
+    }
+
+    // Create account with trial status
+    const trialEndsAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const account = this.accountRepo.create({
+      name: dto.accountName,
+      ruc: dto.ruc,
+      email: dto.email,
+      phone: dto.phone || undefined,
+      type: AccountType.SINGLE,
+      status: AccountStatus.TRIAL,
+      trialEndsAt,
+      apiKey: 'ak_' + randomBytes(32).toString('hex'),
+    });
+    await this.accountRepo.save(account);
+
+    // Create admin user
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const user = this.accountUserRepo.create({
+      accountId: account.id,
+      name: dto.adminName,
+      email: dto.email,
+      passwordHash,
+      role: AccountUserRole.ADMIN,
+    });
+    await this.accountUserRepo.save(user);
+
+    // Notify all superadmins (fire-and-forget)
+    this.notifySuperadmins(account, dto.adminName, trialEndsAt).catch((err) =>
+      this.logger.error(`Failed to notify superadmins about new registration: ${err.message}`),
+    );
+
+    // Auto-login
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: 'account_user' as const,
+      accountId: account.id,
+    };
+    const refreshToken = await this.refreshTokenService.create(user.id, 'account_user', account.id);
+
+    this.logger.log(`New trial account registered: ${account.name} (${account.ruc})`);
+
+    return {
+      accessToken: this.jwtService.sign(payload),
+      refreshToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        accountId: account.id,
+      },
+    };
+  }
+
+  private async notifySuperadmins(account: Account, adminName: string, trialEndsAt: Date) {
+    const admins = await this.adminRepo.find({ where: { isActive: true } });
+    const emails = admins.map((a) => a.email).filter(Boolean);
+    if (emails.length === 0) return;
+
+    await this.notificationService.sendNewTrialRegistration(emails, {
+      accountName: account.name,
+      accountRuc: account.ruc,
+      accountEmail: account.email,
+      adminName,
+      trialEndsAt: trialEndsAt.toISOString().split('T')[0],
+    });
   }
 
   private buildResetUrl(token: string): string {

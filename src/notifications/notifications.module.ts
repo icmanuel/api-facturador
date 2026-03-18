@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Certificate } from '../entities/certificate.entity';
 import { BillingPeriod } from '../entities/billing-period.entity';
 import { Company } from '../entities/company.entity';
+import { Account } from '../entities/account.entity';
 import { NotificationService } from './notification.service';
 import { NotificationCron } from './notification.cron';
 import { RedisLockService } from '../common/services/redis-lock.service';
@@ -11,7 +12,7 @@ import { RedisLockService } from '../common/services/redis-lock.service';
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([Certificate, BillingPeriod, Company]),
+    TypeOrmModule.forFeature([Certificate, BillingPeriod, Company, Account]),
   ],
   providers: [NotificationService, NotificationCron, RedisLockService],
   exports: [NotificationService],

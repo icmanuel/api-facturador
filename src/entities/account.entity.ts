@@ -6,7 +6,7 @@ import {
   UpdateDateColumn,
   OneToMany,
 } from 'typeorm';
-import { AccountType } from './enums';
+import { AccountType, AccountStatus } from './enums';
 import { AccountUser } from './account-user.entity';
 import { Company } from './company.entity';
 import { BillingPeriod } from './billing-period.entity';
@@ -33,6 +33,12 @@ export class Account {
 
   @Column({ name: 'acc_type', type: 'enum', enum: AccountType, enumName: 'account_type', default: AccountType.SINGLE })
   type: AccountType;
+
+  @Column({ name: 'acc_status', type: 'enum', enum: AccountStatus, enumName: 'account_status', default: AccountStatus.ACTIVE })
+  status: AccountStatus;
+
+  @Column({ name: 'acc_trial_ends_at', type: 'timestamptz', nullable: true })
+  trialEndsAt: Date | null;
 
   @Column({ name: 'acc_billing_cycle_day', type: 'smallint', default: 1 })
   billingCycleDay: number;

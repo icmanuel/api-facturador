@@ -62,6 +62,14 @@ export interface BillingInvoiceData {
   total: number;
 }
 
+export interface NewTrialRegistrationData {
+  accountName: string;
+  accountRuc: string;
+  accountEmail: string;
+  adminName: string;
+  trialEndsAt: string; // YYYY-MM-DD
+}
+
 export interface OverduePaymentData {
   accountName: string;
   accountEmail: string;
@@ -355,6 +363,48 @@ export class NotificationService {
 
     const recipients = this.collectAccountRecipients(data.accountEmail, data.companyEmails);
     await this.send(recipients, `[VENCIDO] Pago pendiente ${period} — ${data.accountName} — $${pending.toFixed(2)}`, html);
+  }
+
+  /* ────────── 9. New Trial Registration (to superadmins) ────────── */
+
+  async sendNewTrialRegistration(recipients: string[], data: NewTrialRegistrationData): Promise<void> {
+    const html = this.wrap(`
+      <h2 style="color:#2563eb;margin-bottom:8px">Nuevo Registro — Periodo de Prueba</h2>
+      <p style="color:#555;font-size:14px">
+        Se ha registrado una nueva cuenta en la plataforma con un periodo de prueba de <strong>5 días</strong>.
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600;width:40%">Empresa</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.accountName}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">RUC</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-family:monospace">${data.accountRuc}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Email</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.accountEmail}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#f8f9fa;border:1px solid #e9ecef;font-weight:600">Administrador</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.adminName}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;background:#eff6ff;border:1px solid #e9ecef;font-weight:600;color:#2563eb">Trial Expira</td>
+          <td style="padding:8px 12px;background:#eff6ff;border:1px solid #e9ecef;font-weight:600;color:#2563eb">${data.trialEndsAt}</td>
+        </tr>
+      </table>
+      <p style="color:#555;font-size:13px">
+        Contacte al prospecto dentro de los próximos 5 días para completar la activación.
+      </p>
+    `);
+
+    await this.send(
+      recipients,
+      `[NUEVO REGISTRO] ${data.accountName} (${data.accountRuc}) — Periodo de prueba 5 días`,
+      html,
+    );
   }
 
   /* ────────── Helpers ────────── */

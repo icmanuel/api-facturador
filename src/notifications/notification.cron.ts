@@ -4,7 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, In } from 'typeorm';
 import { Certificate } from '../entities/certificate.entity';
 import { BillingPeriod } from '../entities/billing-period.entity';
-import { BillingStatus } from '../entities/enums';
+import { Account } from '../entities/account.entity';
+import { BillingStatus, AccountStatus } from '../entities/enums';
 import { NotificationService } from './notification.service';
 import { RedisLockService } from '../common/services/redis-lock.service';
 
@@ -17,6 +18,8 @@ export class NotificationCron {
     private readonly certRepo: Repository<Certificate>,
     @InjectRepository(BillingPeriod)
     private readonly billingRepo: Repository<BillingPeriod>,
+    @InjectRepository(Account)
+    private readonly accountRepo: Repository<Account>,
     private readonly notificationService: NotificationService,
     private readonly redisLock: RedisLockService,
   ) {}
@@ -140,6 +143,38 @@ export class NotificationCron {
       this.logger.error(`Overdue payments cron failed: ${err.message}`, err.stack);
     } finally {
       await this.redisLock.release('notification-overdue');
+    }
+  }
+
+  /**
+   * Every 6 hours. Auto-block expired trial accounts.
+   */
+  @Cron('0 */6 * * *')
+  async handleExpiredTrials(): Promise<void> {
+    const acquired = await this.redisLock.acquire('trial-expiry-check', 120);
+    if (!acquired) return;
+
+    try {
+      const expired = await this.accountRepo.find({
+        where: {
+          status: AccountStatus.TRIAL,
+          trialEndsAt: LessThanOrEqual(new Date()),
+        },
+      });
+
+      if (expired.length === 0) return;
+
+      this.logger.log(`Found ${expired.length} expired trial accounts — blocking`);
+
+      for (const account of expired) {
+        account.status = AccountStatus.BLOCKED;
+        await this.accountRepo.save(account);
+        this.logger.log(`Trial expired — blocked account ${account.id} (${account.name})`);
+      }
+    } catch (err: any) {
+      this.logger.error(`Trial expiry cron failed: ${err.message}`, err.stack);
+    } finally {
+      await this.redisLock.release('trial-expiry-check');
     }
   }
 }

@@ -3,6 +3,13 @@ export enum AccountType {
   MULTI = 'multi',
 }
 
+export enum AccountStatus {
+  TRIAL = 'trial',
+  ACTIVE = 'active',
+  SUSPENDED = 'suspended',
+  BLOCKED = 'blocked',
+}
+
 export enum AccountUserRole {
   ADMIN = 'admin',
   OPERATOR = 'operator',
