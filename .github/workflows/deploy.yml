@@ -25,20 +25,21 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          echo -e "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Deploy to server
         run: |
           rsync -avz \
             --exclude node_modules \
             --exclude .env \
-            -e "ssh -i ~/.ssh/deploy_key" \
+            -e "ssh -i ~/.ssh/deploy_key -o LogLevel=ERROR" \
             dist/ package.json package-lock.json \
             root@${{ secrets.SERVER_HOST }}:/root/autorizadorec/api/
 
       - name: Install deps and restart
         run: |
-          ssh -i ~/.ssh/deploy_key root@${{ secrets.SERVER_HOST }} << 'EOF'
+          ssh -i ~/.ssh/deploy_key -o LogLevel=ERROR root@${{ secrets.SERVER_HOST }} << 'EOF'
             cd /root/autorizadorec/api
             npm install --omit=dev
             pm2 restart autorizadorec-api
