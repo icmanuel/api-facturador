@@ -18,6 +18,7 @@ import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { CreateAccountUserDto } from './dto/create-account-user.dto';
 import { UpdateAccountUserDto } from './dto/update-account-user.dto';
+import { ExtendTrialDto } from './dto/extend-trial.dto';
 
 @ApiTags('Admin - Cuentas')
 @ApiBearerAuth()
@@ -99,6 +100,15 @@ export class AccountsController {
   @ApiOperation({ summary: 'Activar cuenta (convertir de trial a activa)' })
   activate(@Param('id', ParseIntPipe) id: number) {
     return this.service.activate(id);
+  }
+
+  @Patch(':id/trial')
+  @ApiOperation({ summary: 'Extender el período de prueba de la cuenta N días' })
+  extendTrial(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ExtendTrialDto,
+  ) {
+    return this.service.extendTrial(id, dto.days);
   }
 
   // ── Account API Key ──

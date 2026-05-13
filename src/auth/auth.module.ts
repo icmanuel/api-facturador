@@ -14,12 +14,15 @@ import { RefreshTokenService } from './refresh-token.service';
 import { PlatformAdmin } from '../entities/platform-admin.entity';
 import { AccountUser } from '../entities/account-user.entity';
 import { Account } from '../entities/account.entity';
+import { Company } from '../entities/company.entity';
+import { EmissionPoint } from '../entities/emission-point.entity';
+import { SubscriptionPlan } from '../entities/subscription-plan.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([PlatformAdmin, AccountUser, Account]),
+    TypeOrmModule.forFeature([PlatformAdmin, AccountUser, Account, Company, EmissionPoint, SubscriptionPlan]),
     NotificationsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({

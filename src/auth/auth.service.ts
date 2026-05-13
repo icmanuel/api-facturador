@@ -2,13 +2,16 @@ import { Injectable, UnauthorizedException, BadRequestException, ConflictExcepti
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { PlatformAdmin } from '../entities/platform-admin.entity';
 import { AccountUser } from '../entities/account-user.entity';
 import { Account } from '../entities/account.entity';
-import { AccountType, AccountStatus, AccountUserRole } from '../entities/enums';
+import { Company } from '../entities/company.entity';
+import { EmissionPoint } from '../entities/emission-point.entity';
+import { SubscriptionPlan } from '../entities/subscription-plan.entity';
+import { AccountType, AccountStatus, AccountUserRole, PlanTier, CompanyEnv } from '../entities/enums';
 import { MailService } from '../common/services/mail.service';
 import { NotificationService } from '../notifications/notification.service';
 import { RefreshTokenService } from './refresh-token.service';
@@ -25,6 +28,12 @@ export class AuthService {
     private readonly accountUserRepo: Repository<AccountUser>,
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
+    @InjectRepository(EmissionPoint)
+    private readonly emissionPointRepo: Repository<EmissionPoint>,
+    @InjectRepository(SubscriptionPlan)
+    private readonly planRepo: Repository<SubscriptionPlan>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly mailService: MailService,
@@ -267,6 +276,30 @@ export class AuthService {
     });
     await this.accountUserRepo.save(user);
 
+    // Create the company for this single-account, with the basic plan and a
+    // default emission point so the client can configure (certificate, doc
+    // types, etc.) from their own panel right away.
+    const plan = await this.resolveDefaultPlan();
+    const company = this.companyRepo.create({
+      accountId: account.id,
+      planId: plan.id,
+      name: dto.accountName,
+      ruc: dto.ruc,
+      email: dto.email,
+      phone: dto.phone || undefined,
+      env: CompanyEnv.TEST,
+      apiKey: 'sk_' + randomBytes(32).toString('hex'),
+      billingStartDate: new Date().toISOString().slice(0, 10),
+    });
+    await this.companyRepo.save(company);
+    await this.emissionPointRepo.save(
+      this.emissionPointRepo.create({
+        companyId: company.id,
+        code: '001',
+        description: 'Punto de emisión principal',
+      }),
+    );
+
     // Notify all superadmins (fire-and-forget)
     this.notifySuperadmins(account, dto.adminName, trialEndsAt).catch((err) =>
       this.logger.error(`Failed to notify superadmins about new registration: ${err.message}`),
@@ -294,6 +327,31 @@ export class AuthService {
         accountId: account.id,
       },
     };
+  }
+
+  /**
+   * Pick the plan assigned to companies created via self-registration:
+   * the active "basic" plan, falling back to the cheapest active non-restricted plan.
+   */
+  private async resolveDefaultPlan(): Promise<SubscriptionPlan> {
+    const basic = await this.planRepo.findOne({
+      where: { tier: PlanTier.BASIC, isActive: true },
+    });
+    if (basic) return basic;
+
+    const fallback = await this.planRepo.findOne({
+      where: {
+        isActive: true,
+        tier: Not(In([PlanTier.UNLIMITED, PlanTier.CUSTOM])),
+      },
+      order: { monthlyPrice: 'ASC' },
+    });
+    if (!fallback) {
+      throw new BadRequestException(
+        'No hay planes disponibles para registrar la cuenta. Contacte soporte.',
+      );
+    }
+    return fallback;
   }
 
   private async notifySuperadmins(account: Account, adminName: string, trialEndsAt: Date) {

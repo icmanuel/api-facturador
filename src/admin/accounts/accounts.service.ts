@@ -196,4 +196,21 @@ export class AccountsService {
     account.trialEndsAt = null;
     return this.repo.save(account);
   }
+
+  /**
+   * Extend (or start) the trial period by N days. If the current trial is still
+   * in the future, the days are added on top of it; otherwise they count from now.
+   */
+  async extendTrial(accountId: number, days: number): Promise<Account> {
+    const account = await this.repo.findOne({ where: { id: accountId } });
+    if (!account) throw new NotFoundException('Cuenta no encontrada');
+    const now = new Date();
+    const base =
+      account.trialEndsAt && account.trialEndsAt.getTime() > now.getTime()
+        ? account.trialEndsAt
+        : now;
+    account.trialEndsAt = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+    account.status = AccountStatus.TRIAL;
+    return this.repo.save(account);
+  }
 }
