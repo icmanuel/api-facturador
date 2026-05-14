@@ -276,10 +276,10 @@ export class AuthService {
     });
     await this.accountUserRepo.save(user);
 
-    // Create the company for this single-account, with the basic plan and a
-    // default emission point so the client can configure (certificate, doc
-    // types, etc.) from their own panel right away.
-    const plan = await this.resolveDefaultPlan();
+    // Create the company for this single-account, with the requested plan
+    // (or basic as fallback) and a default emission point so the client can
+    // configure (certificate, doc types, etc.) from their own panel right away.
+    const plan = await this.resolveDefaultPlan(dto.planTier);
     const company = this.companyRepo.create({
       accountId: account.id,
       planId: plan.id,
@@ -330,10 +330,26 @@ export class AuthService {
   }
 
   /**
-   * Pick the plan assigned to companies created via self-registration:
-   * the active "basic" plan, falling back to the cheapest active non-restricted plan.
+   * Pick the plan to assign on self-registration. If a tier is requested
+   * (and is self-serviceable), use that one; otherwise the active "basic"
+   * plan, falling back to the cheapest active non-restricted plan.
    */
-  private async resolveDefaultPlan(): Promise<SubscriptionPlan> {
+  private async resolveDefaultPlan(requestedTier?: PlanTier): Promise<SubscriptionPlan> {
+    const restricted: PlanTier[] = [PlanTier.UNLIMITED, PlanTier.CUSTOM];
+
+    if (requestedTier) {
+      if (restricted.includes(requestedTier)) {
+        throw new BadRequestException(
+          `El plan "${requestedTier}" solo puede ser asignado por un administrador.`,
+        );
+      }
+      const requested = await this.planRepo.findOne({
+        where: { tier: requestedTier, isActive: true },
+      });
+      if (requested) return requested;
+      // Fall through to default if requested tier exists in enum but no active row
+    }
+
     const basic = await this.planRepo.findOne({
       where: { tier: PlanTier.BASIC, isActive: true },
     });
@@ -342,7 +358,7 @@ export class AuthService {
     const fallback = await this.planRepo.findOne({
       where: {
         isActive: true,
-        tier: Not(In([PlanTier.UNLIMITED, PlanTier.CUSTOM])),
+        tier: Not(In(restricted)),
       },
       order: { monthlyPrice: 'ASC' },
     });

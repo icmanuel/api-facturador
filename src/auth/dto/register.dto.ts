@@ -1,5 +1,6 @@
-import { IsString, IsEmail, IsOptional, Length, MinLength } from 'class-validator';
+import { IsString, IsEmail, IsOptional, Length, MinLength, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PlanTier } from '../../entities/enums';
 
 export class RegisterDto {
   @ApiProperty({ description: 'Nombre de la empresa o cuenta', example: 'Mi Empresa S.A.' })
@@ -28,4 +29,12 @@ export class RegisterDto {
   @IsString()
   @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })
   password: string;
+
+  @ApiPropertyOptional({
+    description: 'Tier del plan a asignar (basic, professional, enterprise, payperuse). Por defecto basic.',
+    enum: PlanTier,
+  })
+  @IsOptional()
+  @IsEnum(PlanTier)
+  planTier?: PlanTier;
 }
