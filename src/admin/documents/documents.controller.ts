@@ -5,8 +5,10 @@ import {
   Query,
   ParseIntPipe,
   DefaultValuePipe,
+  Res,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
 import { DocStatus, SriDocTypeCode, CompanyEnv } from '../../entities/enums';
 
@@ -61,5 +63,22 @@ export class DocumentsController {
   @ApiOperation({ summary: 'Detalle de documento' })
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.service.findOne(id);
+  }
+
+  @Get(':id/files/:fileType')
+  @ApiOperation({ summary: 'Descargar archivo de documento (signed_xml, authorized_xml, ride)' })
+  @ApiParam({ name: 'fileType', enum: ['signed_xml', 'authorized_xml', 'ride'] })
+  async downloadFile(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('fileType') fileType: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename, contentType } = await this.service.downloadFile(id, fileType);
+    res.set({
+      'Content-Type': contentType,
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+    res.end(buffer);
   }
 }

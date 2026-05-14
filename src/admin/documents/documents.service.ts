@@ -2,15 +2,61 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Document } from '../../entities/document.entity';
-import { DocStatus, SriDocTypeCode, CompanyEnv } from '../../entities/enums';
+import { DocumentFile } from '../../entities/document-file.entity';
+import { DocStatus, SriDocTypeCode, CompanyEnv, DocFileType } from '../../entities/enums';
 import { formatDateTz } from '../../common/utils/date.util';
+import { S3StorageService } from '../../engine/storage/s3.service';
 
 @Injectable()
 export class DocumentsService {
   constructor(
     @InjectRepository(Document)
     private readonly repo: Repository<Document>,
+    @InjectRepository(DocumentFile)
+    private readonly fileRepo: Repository<DocumentFile>,
+    private readonly s3Service: S3StorageService,
   ) {}
+
+  async downloadFile(
+    documentId: number,
+    fileType: string,
+  ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    const fileTypeMap: Record<string, DocFileType> = {
+      signed_xml: DocFileType.SIGNED_XML,
+      authorized_xml: DocFileType.AUTHORIZED_XML,
+      ride: DocFileType.RIDE,
+    };
+    const docFileType = fileTypeMap[fileType];
+    if (!docFileType) {
+      throw new NotFoundException(`Tipo de archivo no válido: ${fileType}`);
+    }
+
+    const document = await this.repo.findOne({ where: { id: documentId } });
+    if (!document) throw new NotFoundException('Documento no encontrado');
+
+    const file = await this.fileRepo.findOne({
+      where: { documentId, type: docFileType },
+    });
+    if (!file) {
+      throw new NotFoundException(`Archivo ${fileType} no encontrado para este documento`);
+    }
+
+    const buffer = await this.s3Service.download(file.s3Key);
+
+    const extensions: Record<string, { ext: string; mime: string }> = {
+      signed_xml: { ext: 'xml', mime: 'application/xml' },
+      authorized_xml: { ext: 'xml', mime: 'application/xml' },
+      ride: { ext: 'pdf', mime: 'application/pdf' },
+    };
+    const { ext, mime } = extensions[fileType];
+    const docTypePrefix: Record<string, string> = {
+      '01': 'FAC', '03': 'LIQ', '04': 'NC', '05': 'ND', '06': 'GR', '07': 'RET',
+    };
+    const typeLabel = docTypePrefix[document.typeCode] || 'DOC';
+    const suffix = fileType === 'ride' ? '' : fileType === 'authorized_xml' ? '_AUT' : '_FIR';
+    const filename = `${typeLabel}_${document.accessKey}${suffix}.${ext}`;
+    return { buffer, filename, contentType: mime };
+  }
 
   async findAll(
     page = 1,
