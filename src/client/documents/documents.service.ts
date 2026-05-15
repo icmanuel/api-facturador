@@ -180,6 +180,21 @@ export class ClientDocumentsService {
     return { message: 'RIDE regenerado exitosamente' };
   }
 
+  async reissueToday(accountId: number, documentId: number) {
+    const document = await this.documentRepo.findOne({
+      where: { id: documentId },
+      relations: ['company'],
+    });
+    if (!document) throw new NotFoundException('Documento no encontrado');
+
+    const company = await this.companyRepo.findOne({
+      where: { id: document.companyId, accountId },
+    });
+    if (!company) throw new ForbiddenException('No tiene acceso a este documento');
+
+    return this.processingService.reissueToday(documentId);
+  }
+
   async downloadFile(accountId: number, documentId: number, fileType: string): Promise<{
     buffer: Buffer;
     filename: string;

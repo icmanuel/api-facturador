@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Param,
   Query,
   ParseIntPipe,
@@ -63,6 +64,16 @@ export class DocumentsController {
   @ApiOperation({ summary: 'Detalle de documento' })
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.service.findOne(id);
+  }
+
+  @Post(':id/reissue-today')
+  @ApiOperation({
+    summary: 'Reemitir documento con fecha de hoy',
+    description:
+      'Para documentos en REJECTED/FAILED: consulta primero al SRI por la clave actual (por si quedó autorizado), si no, regenera la clave de acceso con la fecha de hoy, mantiene el secuencial, reconstruye el XML, lo firma y lo reenvía.',
+  })
+  reissueToday(@Param('id', ParseIntPipe) id: number) {
+    return this.service.reissueToday(id);
   }
 
   @Get(':id/files/:fileType')

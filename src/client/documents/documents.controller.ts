@@ -77,4 +77,17 @@ export class ClientDocumentsController {
   ) {
     return this.documentsService.regenerateRide(accountId, id);
   }
+
+  @Post(':id/reissue-today')
+  @ApiOperation({
+    summary: 'Reemitir documento con fecha de hoy',
+    description:
+      'Para documentos en REJECTED/FAILED de esta cuenta: consulta primero al SRI por la clave actual (por si quedó autorizado), si no, regenera la clave con la fecha de hoy, mantiene el secuencial, reconstruye el XML, lo firma y lo reenvía.',
+  })
+  reissueToday(
+    @CurrentUser('accountId') accountId: number,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.documentsService.reissueToday(accountId, id);
+  }
 }

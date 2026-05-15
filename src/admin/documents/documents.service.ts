@@ -6,6 +6,7 @@ import { DocumentFile } from '../../entities/document-file.entity';
 import { DocStatus, SriDocTypeCode, CompanyEnv, DocFileType } from '../../entities/enums';
 import { formatDateTz } from '../../common/utils/date.util';
 import { S3StorageService } from '../../engine/storage/s3.service';
+import { DocumentProcessingService } from '../../engine/processing/document-processing.service';
 
 @Injectable()
 export class DocumentsService {
@@ -15,7 +16,16 @@ export class DocumentsService {
     @InjectRepository(DocumentFile)
     private readonly fileRepo: Repository<DocumentFile>,
     private readonly s3Service: S3StorageService,
+    private readonly processingService: DocumentProcessingService,
   ) {}
+
+  /**
+   * Reissue a failed/rejected document with today's emission date,
+   * regenerating the access key and re-running the pipeline.
+   */
+  reissueToday(documentId: number) {
+    return this.processingService.reissueToday(documentId);
+  }
 
   async downloadFile(
     documentId: number,

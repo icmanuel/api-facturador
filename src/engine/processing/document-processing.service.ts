@@ -7,11 +7,12 @@ import { DocumentError } from '../../entities/document-error.entity';
 import { DocumentFile } from '../../entities/document-file.entity';
 import { Certificate } from '../../entities/certificate.entity';
 import {
-  DocStatus, TimelineStepStatus, SriErrorCategory, SriErrorSeverity, DocFileType,
+  DocStatus, TimelineStepStatus, SriErrorCategory, SriErrorSeverity, DocFileType, SriDocTypeCode,
 } from '../../entities/enums';
 import { XmlService } from '../xml/xml.service';
 import { SigningService } from '../signing/signing.service';
 import { SriService, SriAuthorizationResult } from '../sri/sri.service';
+import { AccessKeyService } from '../sequential/access-key.service';
 import { S3StorageService } from '../storage/s3.service';
 import { RideService, RideData } from '../ride/ride.service';
 import { CryptoService } from '../../common/services/crypto.service';
@@ -46,6 +47,7 @@ export class DocumentProcessingService {
     private readonly xmlService: XmlService,
     private readonly signingService: SigningService,
     private readonly sriService: SriService,
+    private readonly accessKeyService: AccessKeyService,
     private readonly s3Service: S3StorageService,
     private readonly rideService: RideService,
     private readonly cryptoService: CryptoService,
@@ -1427,6 +1429,139 @@ export class DocumentProcessingService {
     }
 
     return base;
+  }
+
+  /**
+   * Reissue a previously failed/rejected document with today's date.
+   * Consults the SRI first to avoid duplicating an already-authorized document;
+   * if not authorized there, regenerates the access key with today's date,
+   * resets timeline/errors/files, updates the payload's emission date, and
+   * runs the full processing pipeline again.
+   *
+   * The sequential is preserved because rejected/failed docs do not consume it.
+   */
+  async reissueToday(documentId: number): Promise<{
+    outcome: 'synced_authorized' | 'reissued';
+    authorized: boolean;
+    authorizationNumber?: string | null;
+    oldAccessKey: string;
+    newAccessKey?: string;
+    processingResult?: ProcessingResult;
+  }> {
+    const doc = await this.docRepo.findOne({
+      where: { id: documentId },
+      relations: ['company'],
+    });
+    if (!doc) throw new BadRequestException('Documento no encontrado');
+
+    const REISSUABLE: DocStatus[] = [DocStatus.REJECTED, DocStatus.FAILED];
+    if (!REISSUABLE.includes(doc.status)) {
+      throw new BadRequestException(
+        `Solo se pueden reemitir documentos en estado REJECTED o FAILED. Estado actual: ${doc.status}.`,
+      );
+    }
+
+    const company = doc.company;
+    if (!company) throw new BadRequestException('Empresa no encontrada para el documento');
+
+    // 1. Ask SRI if the existing key is already authorized — don't duplicate.
+    let sriAuth: SriAuthorizationResult | null = null;
+    try {
+      sriAuth = await this.sriService.checkAuthorization(doc.accessKey, doc.env);
+    } catch (err: any) {
+      this.logger.warn(
+        `reissueToday: SRI authorization consult failed for doc ${documentId}: ${err.message} — proceeding with reissue`,
+      );
+    }
+
+    if (sriAuth?.authorized) {
+      // SRI actually has it authorized despite our local status. Sync and stop.
+      doc.status = DocStatus.AUTHORIZED;
+      doc.authNumber = sriAuth.authorizationNumber ?? doc.accessKey;
+      doc.authAt = sriAuth.authorizedAt ? new Date(sriAuth.authorizedAt) : new Date();
+      await this.docRepo.save(doc);
+      this.logger.log(
+        `reissueToday: doc ${documentId} was actually AUTHORIZED at SRI (auth=${doc.authNumber}). No reissue needed.`,
+      );
+      return {
+        outcome: 'synced_authorized',
+        authorized: true,
+        authorizationNumber: doc.authNumber,
+        oldAccessKey: doc.accessKey,
+      };
+    }
+
+    // 2. Regenerate the access key with today's date.
+    const today = new Date();
+    const sequentialDigits = doc.sequential.includes('-')
+      ? doc.sequential.split('-').pop() ?? doc.sequential
+      : doc.sequential;
+    const oldAccessKey = doc.accessKey;
+    const newAccessKey = this.accessKeyService.generate({
+      issueDate: today,
+      docType: doc.typeCode,
+      ruc: company.ruc,
+      env: doc.env,
+      establishment: doc.establishment,
+      emissionPoint: doc.emissionPoint,
+      sequential: sequentialDigits,
+    });
+
+    // 3. Update the payload's emission date so the regenerated XML matches.
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = String(today.getFullYear());
+    const todayDdMmYyyy = `${dd}/${mm}/${yyyy}`;
+
+    const newPayload = { ...(doc.payload ?? {}) } as Record<string, any>;
+    newPayload.fechaEmision = todayDdMmYyyy;
+    if (doc.typeCode === SriDocTypeCode.GUIA_REMISION && newPayload.fechaIniTransporte) {
+      newPayload.fechaIniTransporte = todayDdMmYyyy;
+    }
+    // Any cached _rawXml is stale — it still has the old date/key.
+    if (newPayload._rawXml) delete newPayload._rawXml;
+
+    // 4. Clear artifacts of the previous attempts.
+    await this.timelineRepo.delete({ documentId: doc.id });
+    await this.errorRepo.delete({ documentId: doc.id });
+    await this.fileRepo.delete({ documentId: doc.id });
+
+    // 5. Persist the document update.
+    doc.accessKey = newAccessKey;
+    doc.issueDate = today;
+    doc.payload = newPayload as any;
+    doc.status = DocStatus.CREATED;
+    doc.retries = 0;
+    doc.authNumber = null as any;
+    doc.authAt = null as any;
+    doc.processingTimeMs = null as any;
+    await this.docRepo.save(doc);
+
+    // 6. Audit timeline entry.
+    await this.timelineRepo.save({
+      documentId: doc.id,
+      step: 'received',
+      status: TimelineStepStatus.COMPLETED,
+      order: 0,
+      description: `Reemitido con fecha de hoy (clave anterior: ${oldAccessKey})`,
+      timestamp: new Date(),
+    });
+
+    this.logger.log(
+      `reissueToday: doc ${documentId} reissued — old key ${oldAccessKey}, new key ${newAccessKey}`,
+    );
+
+    // 7. Run the full processing pipeline.
+    const processingResult = await this.processDocument(doc.id);
+
+    return {
+      outcome: 'reissued',
+      authorized: processingResult.status === 'authorized',
+      authorizationNumber: processingResult.authorizationNumber ?? null,
+      oldAccessKey,
+      newAccessKey,
+      processingResult,
+    };
   }
 
   /**
