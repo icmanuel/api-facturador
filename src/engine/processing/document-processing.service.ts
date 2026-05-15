@@ -448,6 +448,24 @@ export class DocumentProcessingService {
 
       this.emitStatusChange(doc, 'FAILED');
 
+      // Alert superadmin(s) by email — fire-and-forget so it never breaks the pipeline.
+      this.notificationService
+        .sendSystemErrorAlert({
+          documentId,
+          accessKey: doc.accessKey,
+          sequential: doc.sequential,
+          docType: doc.typeCode,
+          companyName: doc.company?.name ?? `Empresa ${doc.companyId}`,
+          companyRuc: doc.company?.ruc ?? '',
+          env: doc.env,
+          errorMessage: error.message,
+          errorDetail: error.stack,
+          failedAt: new Date(),
+        })
+        .catch((err) =>
+          this.logger.error(`Failed to send system-error alert for doc ${documentId}: ${err.message}`),
+        );
+
       collectedErrors.push({ code: 'SYS001', message: error.message });
 
       return {

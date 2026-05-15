@@ -429,6 +429,89 @@ export class NotificationService {
     return Array.from(set);
   }
 
+  /* ────────── System Error Alert (superadmin) ────────── */
+
+  async sendSystemErrorAlert(data: {
+    documentId: number;
+    accessKey: string;
+    sequential: string;
+    docType: string;
+    companyName: string;
+    companyRuc: string;
+    env: string;
+    errorMessage: string;
+    errorDetail?: string | null;
+    failedAt: Date;
+  }): Promise<void> {
+    const recipients = this.getSystemErrorRecipients();
+    if (recipients.length === 0) {
+      this.logger.warn('No SYSTEM_ERROR_NOTIFY_EMAILS configured — system error alert not sent');
+      return;
+    }
+
+    const label = this.docTypeLabels[data.docType] || 'Documento';
+    const adminUrl = `${this.config.get('FRONTEND_URL', 'https://panel.autorizadorec.com')}/admin/documents`;
+    const stackHead = (data.errorDetail || '').split('\n').slice(0, 6).join('\n');
+
+    const html = this.wrap(`
+      <h2 style="color:#dc2626;margin-bottom:8px">⚠️ Error de sistema en emisión</h2>
+      <p style="color:#555;font-size:14px">
+        El documento <strong>${label} ${data.sequential}</strong> de
+        <strong>${data.companyName}</strong> (${data.companyRuc}) falló durante el procesamiento
+        por un error de sistema (no de validación del SRI).
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+        <tr style="background:#fef2f2">
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-weight:600;width:35%">Documento ID</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.documentId}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-weight:600">Ambiente</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.env}</td>
+        </tr>
+        <tr style="background:#fef2f2">
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-weight:600">Clave de acceso</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-size:11px;word-break:break-all">${data.accessKey}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-weight:600">Mensaje</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef;color:#dc2626;font-size:12px">${this.escapeHtml(data.errorMessage)}</td>
+        </tr>
+        <tr style="background:#fef2f2">
+          <td style="padding:8px 12px;border:1px solid #e9ecef;font-weight:600">Cuándo</td>
+          <td style="padding:8px 12px;border:1px solid #e9ecef">${data.failedAt.toISOString()}</td>
+        </tr>
+      </table>
+      ${
+        stackHead
+          ? `<pre style="background:#f8f9fa;border:1px solid #e9ecef;padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;word-break:break-word">${this.escapeHtml(stackHead)}</pre>`
+          : ''
+      }
+      <p style="color:#555;font-size:13px;margin-top:16px">
+        Ver detalle: <a href="${adminUrl}" style="color:#2563eb">${adminUrl}</a>
+      </p>
+    `);
+
+    await this.send(recipients, `[SYS] ${label} ${data.sequential} — ${data.companyName} — ${data.env}`, html);
+  }
+
+  private getSystemErrorRecipients(): string[] {
+    const raw = this.config.get<string>('SYSTEM_ERROR_NOTIFY_EMAILS', 'salazarmanuel6@gmail.com');
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  private escapeHtml(s: string): string {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   private async send(recipients: string[], subject: string, html: string): Promise<void> {
     if (recipients.length === 0) {
       this.logger.warn(`No recipients for notification: ${subject}`);

@@ -29,10 +29,28 @@ export interface SriMessage {
   type: string;
 }
 
-/** Retryable network errors (not SRI logic errors — actual connection failures) */
-const RETRYABLE_CODES = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH'];
-const MAX_NETWORK_RETRIES = 3;
-const NETWORK_RETRY_DELAYS = [3000, 5000, 10000];
+/**
+ * Retryable network errors (not SRI logic errors — actual connection / infra failures).
+ * Includes TLS errors from SRI presenting a misconfigured cert on their load balancer:
+ * those are SRI-side incidents and typically auto-resolve within minutes.
+ */
+const RETRYABLE_CODES = [
+  // Plain transport
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND',
+  'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH', 'ECONNABORTED',
+  // TLS / cert issues coming from SRI's infra (their problem, retry-able from our side)
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_SSL_WRONG_VERSION_NUMBER', 'ERR_TLS_HANDSHAKE_TIMEOUT',
+];
+
+/** Substrings on the error message that also indicate retryable transient failures */
+const RETRYABLE_MESSAGE_HINTS = [
+  'altnames', 'certificate', 'TLS', 'socket hang up', 'network error',
+];
+
+const MAX_NETWORK_RETRIES = 5; // 6 attempts total
+const NETWORK_RETRY_DELAYS = [3000, 8000, 20000, 45000, 90000]; // ~3 min total before giving up
 
 @Injectable()
 export class SriService {
@@ -189,11 +207,14 @@ export class SriService {
   }
 
   private isRetryableNetworkError(error: AxiosError): boolean {
-    if (error.code && RETRYABLE_CODES.includes(error.code)) return true;
-    // Timeout
-    if (error.code === 'ECONNABORTED') return true;
-    // No response received at all
+    const cause: any = (error as any).cause;
+    const codes = [error.code, cause?.code].filter(Boolean) as string[];
+    if (codes.some((c) => RETRYABLE_CODES.includes(c))) return true;
+    // No response received at all (connection level failure)
     if (!error.response && error.request) return true;
+    // Message-based fallback for libraries that drop the code (e.g. some TLS errors)
+    const msg = `${error.message || ''} ${cause?.message || ''}`.toLowerCase();
+    if (RETRYABLE_MESSAGE_HINTS.some((h) => msg.includes(h.toLowerCase()))) return true;
     return false;
   }
 
