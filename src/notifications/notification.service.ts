@@ -495,6 +495,36 @@ export class NotificationService {
     await this.send(recipients, `[SYS] ${label} ${data.sequential} — ${data.companyName} — ${data.env}`, html);
   }
 
+  /* ────────── SRI Incident Alert (superadmin) ────────── */
+
+  async sendSriIncidentAlert(data: {
+    systemErrorDocs: number;
+    windowMinutes: number;
+    sampleMessages: string[];
+  }): Promise<void> {
+    const recipients = this.getSystemErrorRecipients();
+    if (recipients.length === 0) return;
+
+    const samples = data.sampleMessages
+      .slice(0, 5)
+      .map((m) => `<li style="font-size:12px;color:#555">${this.escapeHtml(m)}</li>`)
+      .join('');
+
+    const html = this.wrap(`
+      <h2 style="color:#dc2626;margin-bottom:8px">🚨 Posible incidente del SRI</h2>
+      <p style="color:#555;font-size:14px">
+        Se detectaron <strong>${data.systemErrorDocs} documentos</strong> con errores de sistema
+        en los últimos <strong>${data.windowMinutes} minutos</strong>. Esto suele indicar que el
+        servicio del SRI está caído, lento o con problemas de certificado.
+      </p>
+      <p style="color:#555;font-size:13px">Los documentos se reintentan automáticamente; no se requiere acción inmediata salvo monitorear.</p>
+      ${samples ? `<ul style="margin:12px 0">${samples}</ul>` : ''}
+      <p style="color:#999;font-size:11px">Esta alerta no se repetirá en la próxima hora aunque continúen los errores.</p>
+    `);
+
+    await this.send(recipients, `[INCIDENTE SRI] ${data.systemErrorDocs} documentos con error de sistema`, html);
+  }
+
   private getSystemErrorRecipients(): string[] {
     const raw = this.config.get<string>('SYSTEM_ERROR_NOTIFY_EMAILS', 'salazarmanuel6@gmail.com');
     return raw

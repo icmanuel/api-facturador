@@ -1,12 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan } from 'typeorm';
+import { Repository, LessThan, MoreThan } from 'typeorm';
 import { Document } from '../../entities/document.entity';
-import { DocStatus } from '../../entities/enums';
+import { DocumentError } from '../../entities/document-error.entity';
+import { DocStatus, SriErrorCategory } from '../../entities/enums';
 import { SriService } from '../sri/sri.service';
+import { DocumentProcessingService } from './document-processing.service';
 import { EventsGateway } from '../../events/events.gateway';
 import { RedisLockService } from '../../common/services/redis-lock.service';
+import { NotificationService } from '../../notifications/notification.service';
 
 /**
  * Cron job that cleans up documents stuck in non-terminal states.
@@ -27,12 +30,22 @@ export class StaleDocumentCron {
   /** Documents stuck in CREATED for longer than this are marked FAILED */
   private readonly CREATED_TIMEOUT_MIN = 60;
 
+  /** A system-retry whose scheduled time passed by more than this is considered "lost" */
+  private readonly RETRY_GRACE_MIN = 10;
+  /** SRI-incident threshold: this many docs with system errors within the window triggers an alert */
+  private readonly INCIDENT_THRESHOLD = 8;
+  private readonly INCIDENT_WINDOW_MIN = 60;
+
   constructor(
     @InjectRepository(Document)
     private readonly docRepo: Repository<Document>,
+    @InjectRepository(DocumentError)
+    private readonly errorRepo: Repository<DocumentError>,
     private readonly sriService: SriService,
+    private readonly processingService: DocumentProcessingService,
     private readonly eventsGateway: EventsGateway,
     private readonly redisLock: RedisLockService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -49,10 +62,119 @@ export class StaleDocumentCron {
         this.recoverStuckProcessing(),
         this.resolveStuckReceived(),
         this.cleanupStuckCreated(),
+        this.rescueLostSystemRetries(),
+        this.detectSriIncident(),
       ]);
     } finally {
       await this.redisLock.release('stale-documents-cron');
     }
+  }
+
+  /**
+   * Safety net for Layer 2: documents in FAILED with a pending system-retry
+   * marker whose scheduled time passed long ago — their BullMQ job was lost
+   * (server restart, Redis flush, etc.). Re-run the pipeline directly.
+   */
+  private async rescueLostSystemRetries(): Promise<void> {
+    const graceCutoff = new Date(Date.now() - this.RETRY_GRACE_MIN * 60_000).toISOString();
+
+    const stuck = await this.docRepo
+      .createQueryBuilder('doc')
+      .leftJoinAndSelect('doc.company', 'company')
+      .where('doc.status = :status', { status: DocStatus.FAILED })
+      .andWhere(`doc.payload -> '_systemRetry' IS NOT NULL`)
+      .andWhere(`(doc.payload -> '_systemRetry' ->> 'nextAt') < :grace`, { grace: graceCutoff })
+      .limit(20)
+      .getMany();
+
+    if (stuck.length === 0) return;
+    this.logger.warn(`Found ${stuck.length} documents with a lost system-retry job — rescuing`);
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    for (const doc of stuck) {
+      const sysRetry = (doc.payload as any)?._systemRetry ?? {};
+      const issueStr =
+        typeof doc.issueDate === 'string'
+          ? (doc.issueDate as string).slice(0, 10)
+          : new Date(doc.issueDate).toISOString().slice(0, 10);
+
+      // Stale-dated documents can no longer be authorized — drop the marker.
+      if (issueStr !== todayStr) {
+        this.logger.warn(`Document ${doc.id}: issue date ${issueStr} is not today — clearing retry marker`);
+        await this.clearRetryMarker(doc);
+        continue;
+      }
+
+      try {
+        const result = await this.processingService.processDocument(doc.id);
+        if (result.status === 'failed') {
+          const attempts = (sysRetry.attempts ?? 0) + 1;
+          const max = sysRetry.max ?? 5;
+          if (attempts >= max) {
+            this.logger.warn(`Document ${doc.id}: ${attempts}/${max} system retries exhausted — leaving FAILED`);
+            await this.clearRetryMarker(doc);
+          } else {
+            const payload = { ...(doc.payload as any) };
+            payload._systemRetry = {
+              nextAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+              attempts,
+              max,
+            };
+            await this.docRepo.update(doc.id, { payload });
+            this.logger.log(`Document ${doc.id}: cron retry ${attempts}/${max} failed — next in 30min`);
+          }
+        } else {
+          await this.clearRetryMarker(doc);
+          this.logger.log(`Document ${doc.id}: rescued by cron — status ${result.status}`);
+        }
+      } catch (err: any) {
+        this.logger.error(`Document ${doc.id}: cron rescue crashed: ${err.message}`);
+      }
+    }
+  }
+
+  private async clearRetryMarker(doc: Document): Promise<void> {
+    if (!(doc.payload as any)?._systemRetry) return;
+    const payload = { ...(doc.payload as any) };
+    delete payload._systemRetry;
+    await this.docRepo.update(doc.id, { payload });
+  }
+
+  /**
+   * Detect a possible SRI-wide incident: many documents hitting system errors
+   * within a short window. Sends a single throttled email (once per hour).
+   */
+  private async detectSriIncident(): Promise<void> {
+    const since = new Date(Date.now() - this.INCIDENT_WINDOW_MIN * 60_000);
+
+    const recentSystemErrors = await this.errorRepo.find({
+      where: { category: SriErrorCategory.SYSTEM, createdAt: MoreThan(since) },
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
+
+    const affectedDocs = new Set(recentSystemErrors.map((e) => e.documentId));
+    if (affectedDocs.size < this.INCIDENT_THRESHOLD) return;
+
+    // Throttle: only one incident email per hour. acquire() with no release
+    // leaves the key to expire on its own.
+    const canAlert = await this.redisLock.acquire('sri-incident-alert', 3600);
+    if (!canAlert) {
+      this.logger.warn(`SRI incident ongoing (${affectedDocs.size} docs) — alert already sent this hour`);
+      return;
+    }
+
+    this.logger.error(`Possible SRI incident: ${affectedDocs.size} documents with system errors in ${this.INCIDENT_WINDOW_MIN}min`);
+
+    const sampleMessages = Array.from(new Set(recentSystemErrors.map((e) => e.message))).slice(0, 5);
+    await this.notificationService
+      .sendSriIncidentAlert({
+        systemErrorDocs: affectedDocs.size,
+        windowMinutes: this.INCIDENT_WINDOW_MIN,
+        sampleMessages,
+      })
+      .catch((err) => this.logger.error(`Failed to send SRI incident alert: ${err.message}`));
   }
 
   /**
