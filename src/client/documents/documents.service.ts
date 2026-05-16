@@ -149,6 +149,9 @@ export class ClientDocumentsService {
       authAt: formatDateTz(doc.authAt, tz),
       receivedAt: formatDateTz(doc.receivedAt, tz),
       createdAt: formatDateTz(doc.createdAt, tz),
+      nextRetryAt: (doc.payload as any)?._systemRetry?.nextAt ?? null,
+      systemRetryAttempt: (doc.payload as any)?._systemRetry?.attempts ?? 0,
+      systemRetryMax: (doc.payload as any)?._systemRetry?.max ?? null,
       company: doc.company ? {
         id: doc.company.id,
         name: doc.company.name,

@@ -20,6 +20,11 @@ const MAX_AUTH_CHECK_RETRIES = 10;
 /** Delays for auth-check retries (in ms): 30s, 30s, 60s, 60s, 120s, 120s, 300s... */
 const AUTH_CHECK_DELAYS = [30_000, 30_000, 60_000, 60_000, 120_000, 120_000, 300_000, 300_000, 300_000, 300_000];
 
+/** Max automatic retries for system/network failures before giving up */
+const MAX_SYSTEM_RETRIES = 5;
+/** Delays between system-error retries: 5min, 15min, 45min, 2h, 6h */
+const SYSTEM_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000, 45 * 60_000, 2 * 3_600_000, 6 * 3_600_000];
+
 @Processor(DOCUMENT_QUEUE, { concurrency: 5 })
 export class DocumentProcessor extends WorkerHost implements OnModuleInit {
   private readonly logger = new Logger(DocumentProcessor.name);
@@ -51,9 +56,14 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
     const result = await this.processingService.processDocument(documentId);
 
     if (result.status === 'failed') {
-      // Re-throw so BullMQ retries the full pipeline
-      throw new Error(result.errors[0]?.message || 'Processing failed');
+      // System/network failure: schedule a delayed automatic retry instead of
+      // leaving the document dead. Business errors are not auto-retried.
+      await this.maybeScheduleSystemRetry(documentId, result);
+      return;
     }
+
+    // Reached a terminal/processing state — clear any pending retry marker.
+    await this.clearSystemRetry(documentId);
 
     if (result.status === 'processing') {
       // SRI accepted but hasn't authorized yet — schedule delayed auth check
@@ -62,6 +72,79 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
     }
 
     this.logger.log(`Document ${documentId} finished: ${result.status} in ${result.processingTimeMs}ms`);
+  }
+
+  /**
+   * After a system/network failure, schedule a delayed automatic retry of the
+   * full pipeline. Capped at MAX_SYSTEM_RETRIES and only while the document's
+   * issue date is still today (the SRI rejects stale-dated documents).
+   */
+  private async maybeScheduleSystemRetry(
+    documentId: number,
+    result: { errors: { code: string; message: string }[] },
+  ): Promise<void> {
+    const isSystemError = result.errors.some((e) => e.code === 'SYS001');
+    if (!isSystemError) {
+      // Business error (bad XML, SRI validation, expired cert) — no auto-retry.
+      await this.clearSystemRetry(documentId);
+      return;
+    }
+
+    const doc = await this.docRepo.findOne({ where: { id: documentId } });
+    if (!doc) return;
+
+    const sysRetry = (doc.payload as any)?._systemRetry ?? { attempts: 0 };
+    const nextAttempt = (sysRetry.attempts ?? 0) + 1;
+
+    if (nextAttempt > MAX_SYSTEM_RETRIES) {
+      this.logger.warn(`Document ${documentId}: max system retries (${MAX_SYSTEM_RETRIES}) reached — leaving FAILED`);
+      await this.clearSystemRetry(documentId);
+      return;
+    }
+
+    // The SRI rejects documents whose emission date is not "today" — once the
+    // date rolls over, auto-retry is pointless and a manual reissue is needed.
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const issueStr =
+      typeof doc.issueDate === 'string'
+        ? (doc.issueDate as string).slice(0, 10)
+        : new Date(doc.issueDate).toISOString().slice(0, 10);
+    if (issueStr !== todayStr) {
+      this.logger.warn(
+        `Document ${documentId}: issue date ${issueStr} is not today (${todayStr}) — no auto-retry, manual reissue required`,
+      );
+      await this.clearSystemRetry(documentId);
+      return;
+    }
+
+    const delay = SYSTEM_RETRY_DELAYS_MS[nextAttempt - 1] ?? SYSTEM_RETRY_DELAYS_MS[SYSTEM_RETRY_DELAYS_MS.length - 1];
+    const nextAt = new Date(Date.now() + delay);
+
+    const newPayload = { ...(doc.payload as any) };
+    newPayload._systemRetry = {
+      nextAt: nextAt.toISOString(),
+      attempts: nextAttempt,
+      max: MAX_SYSTEM_RETRIES,
+    };
+    await this.docRepo.update(documentId, { payload: newPayload });
+
+    await this.queue.add(
+      'process',
+      { documentId },
+      { jobId: `doc-sysretry-${documentId}-${nextAttempt}`, delay, attempts: 1 },
+    );
+
+    this.logger.log(
+      `Document ${documentId}: scheduled system retry ${nextAttempt}/${MAX_SYSTEM_RETRIES} in ${delay / 1000}s`,
+    );
+  }
+
+  private async clearSystemRetry(documentId: number): Promise<void> {
+    const doc = await this.docRepo.findOne({ where: { id: documentId } });
+    if (!doc || !(doc.payload as any)?._systemRetry) return;
+    const newPayload = { ...(doc.payload as any) };
+    delete newPayload._systemRetry;
+    await this.docRepo.update(documentId, { payload: newPayload });
   }
 
   /**

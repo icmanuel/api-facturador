@@ -1538,6 +1538,8 @@ export class DocumentProcessingService {
     }
     // Any cached _rawXml is stale — it still has the old date/key.
     if (newPayload._rawXml) delete newPayload._rawXml;
+    // Drop any pending auto-retry marker — this is a fresh manual reissue.
+    if (newPayload._systemRetry) delete newPayload._systemRetry;
 
     // 4. Clear artifacts of the previous attempts.
     await this.timelineRepo.delete({ documentId: doc.id });

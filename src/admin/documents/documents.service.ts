@@ -158,6 +158,7 @@ export class DocumentsService {
 
   private formatDocument(doc: Document) {
     const tz = doc.company?.timezone ?? 'America/Guayaquil';
+    const sysRetry = (doc.payload as any)?._systemRetry ?? null;
     return {
       ...doc,
       totalAmount: Number(doc.totalAmount),
@@ -168,6 +169,9 @@ export class DocumentsService {
       receivedAt: formatDateTz(doc.receivedAt, tz),
       createdAt: formatDateTz(doc.createdAt, tz),
       updatedAt: formatDateTz(doc.updatedAt, tz),
+      nextRetryAt: sysRetry?.nextAt ?? null,
+      systemRetryAttempt: sysRetry?.attempts ?? 0,
+      systemRetryMax: sysRetry?.max ?? null,
     };
   }
 }
