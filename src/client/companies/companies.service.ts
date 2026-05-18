@@ -11,10 +11,11 @@ import { randomBytes } from 'crypto';
 import { Company } from '../../entities/company.entity';
 import { Account } from '../../entities/account.entity';
 import { SubscriptionPlan } from '../../entities/subscription-plan.entity';
-import { PlanTier, AccountType } from '../../entities/enums';
+import { PlanTier, AccountType, DocStatus, CompanyEnv } from '../../entities/enums';
 import { EmissionPoint } from '../../entities/emission-point.entity';
 import { CompanySeries } from '../../entities/company-series.entity';
 import { CompanyDocType } from '../../entities/company-doc-type.entity';
+import { Document } from '../../entities/document.entity';
 import { S3StorageService } from '../../engine/storage/s3.service';
 import { CertificatesService } from '../../admin/certificates/certificates.service';
 import { CreateClientCompanyDto } from './dto/create-client-company.dto';
@@ -39,6 +40,8 @@ export class ClientCompaniesService {
     private readonly planRepo: Repository<SubscriptionPlan>,
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
+    @InjectRepository(Document)
+    private readonly documentRepo: Repository<Document>,
     private readonly dataSource: DataSource,
     private readonly s3Service: S3StorageService,
     private readonly certificatesService: CertificatesService,
@@ -130,6 +133,60 @@ export class ClientCompaniesService {
     const company = await this.findOne(accountId, companyId);
     Object.assign(company, dto);
     return this.companyRepo.save(company);
+  }
+
+  /**
+   * Change the company's RUC. Allowed only while no real (production) document
+   * has been authorized — once a company has authorized invoices under a RUC,
+   * the identity is locked. Test/rejected/failed documents do not block it.
+   * Keeps the owning account's RUC in sync for single-company accounts.
+   */
+  async updateRuc(accountId: number, companyId: number, newRuc: string): Promise<Company> {
+    const company = await this.findOne(accountId, companyId);
+
+    if (company.ruc === newRuc) {
+      return company;
+    }
+
+    // Block if there is any authorized document in production.
+    const authorizedProd = await this.documentRepo.count({
+      where: {
+        companyId: company.id,
+        status: DocStatus.AUTHORIZED,
+        env: CompanyEnv.PRODUCTION,
+      },
+    });
+    if (authorizedProd > 0) {
+      throw new ConflictException(
+        'No se puede cambiar el RUC: la empresa ya tiene comprobantes autorizados en producción. ' +
+          'Contacte a soporte si necesita modificarlo.',
+      );
+    }
+
+    // RUC must be unique across companies.
+    const ownedByOtherCompany = await this.companyRepo.findOne({
+      where: { ruc: newRuc, id: Not(company.id) },
+    });
+    if (ownedByOtherCompany) {
+      throw new ConflictException(`Ya existe una empresa registrada con el RUC ${newRuc}.`);
+    }
+
+    company.ruc = newRuc;
+    await this.companyRepo.save(company);
+
+    // Keep the account RUC in sync for single-company accounts.
+    const account = await this.accountRepo.findOne({ where: { id: accountId } });
+    if (account && account.type === AccountType.SINGLE && account.ruc !== newRuc) {
+      const accountRucTaken = await this.accountRepo.findOne({
+        where: { ruc: newRuc, id: Not(account.id) },
+      });
+      if (!accountRucTaken) {
+        account.ruc = newRuc;
+        await this.accountRepo.save(account);
+      }
+    }
+
+    return company;
   }
 
   async regenerateApiKey(accountId: number, companyId: number) {

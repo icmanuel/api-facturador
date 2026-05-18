@@ -6,6 +6,7 @@ import { CompanySeries } from '../../entities/company-series.entity';
 import { CompanyDocType } from '../../entities/company-doc-type.entity';
 import { Account } from '../../entities/account.entity';
 import { SubscriptionPlan } from '../../entities/subscription-plan.entity';
+import { Document } from '../../entities/document.entity';
 import { EngineModule } from '../../engine/engine.module';
 import { CertificatesModule } from '../../admin/certificates/certificates.module';
 import { AccountApiKeyGuard } from '../../common/guards/account-api-key.guard';
@@ -15,7 +16,7 @@ import { ClientCompaniesService } from './companies.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Company, EmissionPoint, CompanySeries, CompanyDocType, Account, SubscriptionPlan]),
+    TypeOrmModule.forFeature([Company, EmissionPoint, CompanySeries, CompanyDocType, Account, SubscriptionPlan, Document]),
     EngineModule,
     CertificatesModule,
   ],

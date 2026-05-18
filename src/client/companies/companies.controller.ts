@@ -25,6 +25,7 @@ import { JwtOrAccountKeyGuard } from '../../common/guards/jwt-or-account-key.gua
 import { ClientCompaniesService } from './companies.service';
 import { CreateClientCompanyDto } from './dto/create-client-company.dto';
 import { UpdateClientCompanyDto } from './dto/update-client-company.dto';
+import { UpdateCompanyRucDto } from './dto/update-company-ruc.dto';
 import { SetDocTypesDto } from './dto/set-doc-types.dto';
 import { UploadCertificateDto } from './dto/upload-certificate.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
@@ -79,6 +80,20 @@ export class ClientCompaniesController {
     @Body() dto: UpdateClientCompanyDto,
   ) {
     return this.companiesService.update(accountId, id, dto);
+  }
+
+  @Patch(':id/ruc')
+  @ApiOperation({
+    summary: 'Cambiar el RUC de la empresa',
+    description:
+      'Permitido solo mientras la empresa no tenga comprobantes autorizados en producción. Sincroniza el RUC de la cuenta para cuentas de empresa única.',
+  })
+  updateRuc(
+    @CurrentUser('accountId') accountId: number,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateCompanyRucDto,
+  ) {
+    return this.companiesService.updateRuc(accountId, id, dto.ruc);
   }
 
   @Post(':id/logo')
