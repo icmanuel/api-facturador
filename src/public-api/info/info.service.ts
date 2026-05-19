@@ -1,13 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Company } from '../../entities/company.entity';
 import { Certificate } from '../../entities/certificate.entity';
 import { Document } from '../../entities/document.entity';
+import { EmissionPoint } from '../../entities/emission-point.entity';
 import { CertificatesService } from '../../admin/certificates/certificates.service';
 import { CompanyEnv } from '../../entities/enums';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
+import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
+import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
 
 @Injectable()
 export class InfoService {
@@ -18,8 +21,77 @@ export class InfoService {
     private readonly certRepo: Repository<Certificate>,
     @InjectRepository(Document)
     private readonly docRepo: Repository<Document>,
+    @InjectRepository(EmissionPoint)
+    private readonly emissionPointRepo: Repository<EmissionPoint>,
     private readonly certificatesService: CertificatesService,
   ) {}
+
+  /* ────────── Emission Points ────────── */
+
+  async listEmissionPoints(companyId: number) {
+    const points = await this.emissionPointRepo.find({
+      where: { companyId },
+      order: { code: 'ASC' },
+    });
+    return points.map((ep) => ({
+      id: ep.id,
+      code: ep.code,
+      description: ep.description ?? null,
+      isActive: ep.isActive,
+    }));
+  }
+
+  async createEmissionPoint(companyId: number, dto: CreateEmissionPointDto) {
+    if (!/^\d{3}$/.test(dto.code)) {
+      throw new BadRequestException('El código del punto de emisión debe ser de 3 dígitos numéricos.');
+    }
+    const exists = await this.emissionPointRepo.findOne({
+      where: { companyId, code: dto.code },
+    });
+    if (exists) {
+      throw new ConflictException(`Ya existe un punto de emisión con el código ${dto.code}.`);
+    }
+    const ep = await this.emissionPointRepo.save(
+      this.emissionPointRepo.create({
+        companyId,
+        code: dto.code,
+        description: dto.description,
+      }),
+    );
+    return { id: ep.id, code: ep.code, description: ep.description ?? null, isActive: ep.isActive };
+  }
+
+  async updateEmissionPoint(companyId: number, empId: number, dto: UpdateEmissionPointDto) {
+    const ep = await this.emissionPointRepo.findOne({ where: { id: empId, companyId } });
+    if (!ep) {
+      throw new NotFoundException(`Punto de emisión ${empId} no encontrado.`);
+    }
+    if (dto.code !== undefined && dto.code !== ep.code) {
+      if (!/^\d{3}$/.test(dto.code)) {
+        throw new BadRequestException('El código del punto de emisión debe ser de 3 dígitos numéricos.');
+      }
+      const clash = await this.emissionPointRepo.findOne({ where: { companyId, code: dto.code } });
+      if (clash) throw new ConflictException(`Ya existe un punto de emisión con el código ${dto.code}.`);
+      ep.code = dto.code;
+    }
+    if (dto.description !== undefined) ep.description = dto.description as any;
+    if (dto.isActive !== undefined) ep.isActive = dto.isActive;
+    await this.emissionPointRepo.save(ep);
+    return { id: ep.id, code: ep.code, description: ep.description ?? null, isActive: ep.isActive };
+  }
+
+  async deleteEmissionPoint(companyId: number, empId: number) {
+    const ep = await this.emissionPointRepo.findOne({ where: { id: empId, companyId } });
+    if (!ep) {
+      throw new NotFoundException(`Punto de emisión ${empId} no encontrado.`);
+    }
+    const total = await this.emissionPointRepo.count({ where: { companyId } });
+    if (total <= 1) {
+      throw new ConflictException('La empresa debe tener al menos un punto de emisión.');
+    }
+    await this.emissionPointRepo.delete({ id: empId, companyId });
+    return { message: `Punto de emisión ${ep.code} eliminado.` };
+  }
 
   getCompanyInfo(company: Company) {
     return {

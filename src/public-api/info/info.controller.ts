@@ -1,8 +1,8 @@
 import {
-  Controller, Get, Put, Post, Patch, Body, UseGuards,
-  UseInterceptors, UploadedFile, BadRequestException,
+  Controller, Get, Put, Post, Patch, Delete, Param, Body, UseGuards,
+  UseInterceptors, UploadedFile, BadRequestException, ParseIntPipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiSecurity, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiSecurity, ApiConsumes, ApiParam } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiKeyGuard } from '../guards/api-key.guard';
 import { CurrentCompany } from '../guards/current-company.decorator';
@@ -12,6 +12,8 @@ import { InfoService } from './info.service';
 import { UpdateEnvironmentDto } from './dto/update-environment.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { UploadCertificateDto } from '../../client/companies/dto/upload-certificate.dto';
+import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
+import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
 
 @ApiTags('API Pública - Empresa')
 @ApiSecurity('api-key')
@@ -89,5 +91,43 @@ export class InfoController {
   @ApiOperation({ summary: 'Regenerar API Key de la empresa (invalida la anterior)' })
   regenerateApiKey(@CurrentCompany('id') companyId: number) {
     return this.service.regenerateApiKey(companyId);
+  }
+
+  // ── Emission points ──
+
+  @Get('emission-points')
+  @ApiOperation({ summary: 'Listar puntos de emisión de la empresa' })
+  listEmissionPoints(@CurrentCompany('id') companyId: number) {
+    return this.service.listEmissionPoints(companyId);
+  }
+
+  @Post('emission-points')
+  @ApiOperation({ summary: 'Crear un punto de emisión' })
+  createEmissionPoint(
+    @CurrentCompany('id') companyId: number,
+    @Body() dto: CreateEmissionPointDto,
+  ) {
+    return this.service.createEmissionPoint(companyId, dto);
+  }
+
+  @Patch('emission-points/:empId')
+  @ApiOperation({ summary: 'Actualizar un punto de emisión' })
+  @ApiParam({ name: 'empId', type: Number })
+  updateEmissionPoint(
+    @CurrentCompany('id') companyId: number,
+    @Param('empId', ParseIntPipe) empId: number,
+    @Body() dto: UpdateEmissionPointDto,
+  ) {
+    return this.service.updateEmissionPoint(companyId, empId, dto);
+  }
+
+  @Delete('emission-points/:empId')
+  @ApiOperation({ summary: 'Eliminar un punto de emisión' })
+  @ApiParam({ name: 'empId', type: Number })
+  deleteEmissionPoint(
+    @CurrentCompany('id') companyId: number,
+    @Param('empId', ParseIntPipe) empId: number,
+  ) {
+    return this.service.deleteEmissionPoint(companyId, empId);
   }
 }
