@@ -278,6 +278,12 @@ export class RideService {
     const logoH = data.logoBuffer ? 110 : 0;
     const logoGap = data.logoBuffer ? 4 : 0;
 
+    // Only show "Direccion Sucursal" when it differs from "Direccion Matriz"
+    // (avoid printing the same address twice).
+    const normAddr = (s?: string) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const showSucursal =
+      !!data.dirEstablecimiento && normAddr(data.dirEstablecimiento) !== normAddr(data.dirMatriz);
+
     let compInfoH = 10; // top padding
     const rsH = doc.font(FONT_BOLD).fontSize(9).heightOfString(data.razonSocial, { width: lInner });
     compInfoH += rsH + 6;
@@ -289,8 +295,8 @@ export class RideService {
       const dmH = doc.font(FONT_NORMAL).fontSize(8).heightOfString(data.dirMatriz, { width: lInner - lLabelW });
       compInfoH += Math.max(12, dmH) + 6;
     }
-    if (data.dirEstablecimiento) {
-      const deH = doc.font(FONT_NORMAL).fontSize(8).heightOfString(data.dirEstablecimiento, { width: lInner - lLabelW });
+    if (showSucursal) {
+      const deH = doc.font(FONT_NORMAL).fontSize(8).heightOfString(data.dirEstablecimiento!, { width: lInner - lLabelW });
       compInfoH += Math.max(12, deH) + 6;
     }
     if (data.contribuyenteEspecial) compInfoH += 16;
@@ -446,13 +452,13 @@ export class RideService {
       ly += Math.max(12, dmH2) + 6;
     }
 
-    // Direccion Sucursal
-    if (data.dirEstablecimiento) {
+    // Direccion Sucursal (solo si difiere de la matriz)
+    if (showSucursal) {
       doc.font(FONT_BOLD).fontSize(8);
       doc.text('Direccion\nSucursal:', x + lPad, ly, { width: lLabelW });
       doc.font(FONT_NORMAL).fontSize(8);
-      doc.text(data.dirEstablecimiento, x + lPad + lLabelW, ly, { width: lInner - lLabelW });
-      const deH2 = doc.heightOfString(data.dirEstablecimiento, { width: lInner - lLabelW });
+      doc.text(data.dirEstablecimiento!, x + lPad + lLabelW, ly, { width: lInner - lLabelW });
+      const deH2 = doc.heightOfString(data.dirEstablecimiento!, { width: lInner - lLabelW });
       ly += Math.max(12, deH2) + 6;
     }
 
