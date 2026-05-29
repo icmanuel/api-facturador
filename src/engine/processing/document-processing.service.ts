@@ -1294,7 +1294,9 @@ export class DocumentProcessingService {
       codDoc: doc.typeCode,
       establecimiento: doc.establishment,
       puntoEmision: doc.emissionPoint,
-      secuencial: doc.sequential,
+      // doc.sequential is stored as "estab-punto-secuencial"; the RIDE composes the
+      // number itself, so pass only the 9-digit sequential to avoid duplicating it.
+      secuencial: doc.sequential.split('-').pop() || doc.sequential,
       claveAcceso: doc.accessKey,
       numeroAutorizacion: authResult.authorizationNumber || doc.accessKey,
       fechaAutorizacion: this.toEcuadorDateTime(authResult.authorizedAt || new Date().toISOString()),
