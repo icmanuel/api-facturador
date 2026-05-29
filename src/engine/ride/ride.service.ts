@@ -410,7 +410,10 @@ export class RideService {
     const compBoxH = totalH - logoH - logoGap;
     this.box(doc, x, compInfoY, leftW, compBoxH);
 
-    let ly = compInfoY + 10;
+    // When there is no logo, the box is much taller than the info, leaving a big
+    // empty space. Anchor the company info to the bottom edge of the box instead.
+    const bottomSlack = !data.logoBuffer ? Math.max(0, compBoxH - compInfoH) : 0;
+    let ly = compInfoY + 10 + bottomSlack;
 
     // Razon social (left-aligned, bold)
     doc.font(FONT_BOLD).fontSize(9);
