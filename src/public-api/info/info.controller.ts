@@ -15,6 +15,7 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { UploadCertificateDto } from '../../client/companies/dto/upload-certificate.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
 import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
+import { imageFileFilter, resolveImageMime } from '../../common/utils/image-upload.util';
 
 @ApiTags('API Pública - Empresa')
 @ApiSecurity('api-key')
@@ -102,13 +103,7 @@ export class InfoController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => {
-        if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
-          cb(new BadRequestException('Solo se permiten imágenes PNG o JPG'), false);
-          return;
-        }
-        cb(null, true);
-      },
+      fileFilter: imageFileFilter,
     }),
   )
   uploadLogo(
@@ -116,7 +111,7 @@ export class InfoController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException('Archivo de imagen requerido (campo "file").');
-    return this.service.uploadLogo(company, file.buffer, file.mimetype);
+    return this.service.uploadLogo(company, file.buffer, resolveImageMime(file));
   }
 
   @Get('logo')

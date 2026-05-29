@@ -37,6 +37,7 @@ import { SetSequentialDto } from './dto/set-sequential.dto';
 import { CompanyStatus, SriDocTypeCode } from '../../entities/enums';
 import { SmtpService } from '../../client/smtp/smtp.service';
 import { UpsertSmtpDto } from '../../client/smtp/dto/upsert-smtp.dto';
+import { imageFileFilter, resolveImageMime } from '../../common/utils/image-upload.util';
 
 class SetDocTypesDto {
   @IsArray()
@@ -156,13 +157,7 @@ export class CompaniesController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB
-      fileFilter: (_req, file, cb) => {
-        if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
-          cb(new BadRequestException('Solo se permiten imágenes PNG o JPG'), false);
-          return;
-        }
-        cb(null, true);
-      },
+      fileFilter: imageFileFilter,
     }),
   )
   uploadLogo(
@@ -170,7 +165,7 @@ export class CompaniesController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException('Archivo requerido');
-    return this.companiesService.uploadLogo(id, file.buffer, file.mimetype);
+    return this.companiesService.uploadLogo(id, file.buffer, resolveImageMime(file));
   }
 
   @Delete(':id/logo')

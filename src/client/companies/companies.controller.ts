@@ -32,6 +32,7 @@ import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emissio
 import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
 import { SetSequentialDto } from '../../admin/companies/dto/set-sequential.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { imageFileFilter, resolveImageMime } from '../../common/utils/image-upload.util';
 
 @ApiTags('Client - Companies')
 @ApiBearerAuth()
@@ -102,13 +103,7 @@ export class ClientCompaniesController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => {
-        if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
-          cb(new BadRequestException('Solo se permiten imágenes PNG o JPG'), false);
-          return;
-        }
-        cb(null, true);
-      },
+      fileFilter: imageFileFilter,
     }),
   )
   uploadLogo(
@@ -117,7 +112,7 @@ export class ClientCompaniesController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException('Archivo requerido');
-    return this.companiesService.uploadLogo(accountId, id, file.buffer, file.mimetype);
+    return this.companiesService.uploadLogo(accountId, id, file.buffer, resolveImageMime(file));
   }
 
   @Delete(':id/logo')
