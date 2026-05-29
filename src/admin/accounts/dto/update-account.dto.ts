@@ -22,4 +22,13 @@ export class UpdateAccountDto extends PartialType(
   @IsOptional()
   @IsString()
   warningMessage?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Pie de página del RIDE (branding por cuenta), ej. "Hecho por ...". null o vacío = no imprime nada.',
+    nullable: true,
+  })
+  @ValidateIf((_, value) => value !== null)
+  @IsOptional()
+  @IsString()
+  rideFooter?: string | null;
 }

@@ -111,6 +111,9 @@ export interface RideData {
   // Logo (optional, Buffer from S3)
   logoBuffer?: Buffer;
 
+  // Pie de página configurable a nivel de cuenta (branding), ej. "Hecho por ..."
+  brandFooter?: string;
+
   // ── Nota de Crédito-specific fields (codDoc=04) ──
   codDocModificado?: string;    // '01'=Factura, etc.
   numDocModificado?: string;    // 'NNN-NNN-NNNNNNNNN'
@@ -218,6 +221,8 @@ export class RideService {
           y = this.drawDetailTable(doc, data, y, pw);
           y = this.drawFooter(doc, data, y, pw);
         }
+
+        this.drawBrandFooter(doc, data);
 
         doc.end();
       } catch (err) {
@@ -625,6 +630,16 @@ export class RideService {
   // ══════════════════════════════════════════════════════════════════
   //  FOOTER — Info Adicional (left) + Totals (right) + Payments
   // ══════════════════════════════════════════════════════════════════
+  /** Configurable branding footer (per account), drawn at the bottom of the last page. */
+  private drawBrandFooter(doc: PDFKit.PDFDocument, data: RideData): void {
+    const text = (data.brandFooter || '').trim();
+    if (!text) return;
+    const pw = doc.page.width - PAGE_ML - PAGE_MR;
+    doc.font(FONT_NORMAL).fontSize(7).fillColor('#888888');
+    doc.text(text, PAGE_ML, doc.page.height - 22, { width: pw, align: 'center', lineBreak: false });
+    doc.fillColor('#000000');
+  }
+
   private drawFooter(doc: PDFKit.PDFDocument, data: RideData, startY: number, pw: number): number {
     const x = PAGE_ML;
     let y = startY;

@@ -66,7 +66,7 @@ export class DocumentProcessingService {
 
     const doc = await this.docRepo.findOne({
       where: { id: documentId },
-      relations: ['company'],
+      relations: ['company', 'company.account'],
     });
 
     if (!doc) {
@@ -1290,6 +1290,7 @@ export class DocumentProcessingService {
       contribuyenteRimpe: payload.contribuyenteRimpe || undefined,
       contribuyenteEspecial: payload.contribuyenteEspecial || undefined,
       agenteRetencion: payload.agenteRetencion || undefined,
+      brandFooter: company.account?.rideFooter || undefined,
 
       codDoc: doc.typeCode,
       establecimiento: doc.establishment,
@@ -1594,7 +1595,7 @@ export class DocumentProcessingService {
   async regenerateRide(documentId: number): Promise<Buffer> {
     const doc = await this.docRepo.findOne({
       where: { id: documentId },
-      relations: ['company'],
+      relations: ['company', 'company.account'],
     });
 
     if (!doc) throw new Error(`Document ${documentId} not found`);
