@@ -1,7 +1,8 @@
 import {
-  Controller, Get, Put, Post, Patch, Delete, Param, Body, UseGuards,
-  UseInterceptors, UploadedFile, BadRequestException, ParseIntPipe,
+  Controller, Get, Put, Post, Patch, Delete, Param, Body, Res, UseGuards,
+  UseInterceptors, UploadedFile, BadRequestException, NotFoundException, ParseIntPipe,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiSecurity, ApiConsumes, ApiParam } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiKeyGuard } from '../guards/api-key.guard';
@@ -91,6 +92,46 @@ export class InfoController {
   @ApiOperation({ summary: 'Regenerar API Key de la empresa (invalida la anterior)' })
   regenerateApiKey(@CurrentCompany('id') companyId: number) {
     return this.service.regenerateApiKey(companyId);
+  }
+
+  // ── Logo (aparece en el RIDE/PDF) ──
+
+  @Post('logo')
+  @ApiOperation({ summary: 'Subir logo de la empresa (aparece en el RIDE/PDF)' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 2 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.mimetype)) {
+          cb(new BadRequestException('Solo se permiten imágenes PNG o JPG'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  uploadLogo(
+    @CurrentCompany() company: Company,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Archivo de imagen requerido (campo "file").');
+    return this.service.uploadLogo(company, file.buffer, file.mimetype);
+  }
+
+  @Get('logo')
+  @ApiOperation({ summary: 'Descargar el logo actual de la empresa' })
+  async getLogo(@CurrentCompany('id') companyId: number, @Res() res: Response) {
+    const logo = await this.service.getLogo(companyId);
+    if (!logo) throw new NotFoundException('La empresa no tiene logo cargado.');
+    res.set({ 'Content-Type': logo.contentType, 'Content-Length': logo.buffer.length });
+    res.end(logo.buffer);
+  }
+
+  @Delete('logo')
+  @ApiOperation({ summary: 'Eliminar el logo de la empresa' })
+  deleteLogo(@CurrentCompany() company: Company) {
+    return this.service.deleteLogo(company);
   }
 
   // ── Emission points ──

@@ -7,6 +7,7 @@ import { Certificate } from '../../entities/certificate.entity';
 import { Document } from '../../entities/document.entity';
 import { EmissionPoint } from '../../entities/emission-point.entity';
 import { CertificatesService } from '../../admin/certificates/certificates.service';
+import { S3StorageService } from '../../engine/storage/s3.service';
 import { CompanyEnv } from '../../entities/enums';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
@@ -24,7 +25,35 @@ export class InfoService {
     @InjectRepository(EmissionPoint)
     private readonly emissionPointRepo: Repository<EmissionPoint>,
     private readonly certificatesService: CertificatesService,
+    private readonly s3Service: S3StorageService,
   ) {}
+
+  /* ────────── Logo (para el RIDE/PDF) ────────── */
+
+  async uploadLogo(company: Company, buffer: Buffer, mimeType: string) {
+    if (company.logoS3Key) {
+      await this.s3Service.deleteLogo(company.logoS3Key).catch(() => {});
+    }
+    const result = await this.s3Service.uploadLogo(company.ruc, buffer, mimeType);
+    await this.companyRepo.update(company.id, { logoS3Key: result.s3Key });
+    return { logoS3Key: result.s3Key, message: 'Logo actualizado. Aparecerá en los próximos comprobantes (RIDE).' };
+  }
+
+  async deleteLogo(company: Company) {
+    if (company.logoS3Key) {
+      await this.s3Service.deleteLogo(company.logoS3Key).catch(() => {});
+      await this.companyRepo.update(company.id, { logoS3Key: null as any });
+    }
+    return { message: 'Logo eliminado.' };
+  }
+
+  async getLogo(companyId: number): Promise<{ buffer: Buffer; contentType: string } | null> {
+    const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    if (!company?.logoS3Key) return null;
+    const buffer = await this.s3Service.download(company.logoS3Key);
+    const contentType = company.logoS3Key.endsWith('.png') ? 'image/png' : 'image/jpeg';
+    return { buffer, contentType };
+  }
 
   /* ────────── Emission Points ────────── */
 
