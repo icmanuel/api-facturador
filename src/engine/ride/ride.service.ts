@@ -635,9 +635,17 @@ export class RideService {
     const text = (data.brandFooter || '').trim();
     if (!text) return;
     const pw = doc.page.width - PAGE_ML - PAGE_MR;
-    doc.font(FONT_NORMAL).fontSize(7).fillColor('#888888');
-    doc.text(text, PAGE_ML, doc.page.height - 22, { width: pw, align: 'center', lineBreak: false });
-    doc.fillColor('#000000');
+    // Writing inside the bottom margin makes PDFKit auto-add a blank page.
+    // Temporarily drop the bottom margin so the footer stays on the current page.
+    const prevBottom = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
+    try {
+      doc.font(FONT_NORMAL).fontSize(7).fillColor('#888888');
+      doc.text(text, PAGE_ML, doc.page.height - 20, { width: pw, align: 'center', lineBreak: false });
+      doc.fillColor('#000000');
+    } finally {
+      doc.page.margins.bottom = prevBottom;
+    }
   }
 
   private drawFooter(doc: PDFKit.PDFDocument, data: RideData, startY: number, pw: number): number {
