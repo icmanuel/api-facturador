@@ -390,17 +390,25 @@ export class RideService {
     //  DRAW LEFT COLUMN: Logo (top) + Company info (bottom)
     // ══════════════════════════════════════════════
 
-    // Logo (no border)
+    // Logo (no border). Confined to its slot with `fit` (keeps aspect ratio,
+    // never exceeds the box) AND a hard clip region as a safety net so a logo
+    // can never spill outside its area regardless of its dimensions/metadata.
     if (data.logoBuffer) {
+      const padX = 10;
+      const padY = 8;
+      const logoMaxW = leftW - padX * 2;
+      const logoMaxH = logoH - padY * 2;
       try {
-        const logoMaxW = leftW - 20;
-        const logoMaxH = logoH - 16;
-        doc.image(data.logoBuffer, x + 10, startY + 8, {
+        doc.save();
+        doc.rect(x + padX, startY + padY, logoMaxW, logoMaxH).clip();
+        doc.image(data.logoBuffer, x + padX, startY + padY, {
           fit: [logoMaxW, logoMaxH],
           align: 'center',
           valign: 'center',
         });
+        doc.restore();
       } catch (err: any) {
+        doc.restore();
         this.logger.warn(`Could not render logo in RIDE: ${err.message}`);
       }
     }
