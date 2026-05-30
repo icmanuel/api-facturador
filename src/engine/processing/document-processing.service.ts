@@ -114,6 +114,16 @@ export class DocumentProcessingService {
       return { status: 'processing', errors: [], processingTimeMs: 0 };
     }
 
+    // If this is a retry (anything but a fresh CREATED), drop the previous
+    // attempt's timeline so the UI only shows the current attempt. We keep
+    // the document_error rows so the audit history of past failures stays.
+    const isRetry = doc.status !== DocStatus.CREATED;
+    if (isRetry) {
+      await this.timelineRepo.delete({ documentId });
+      await this.addTimeline(documentId, 'received', TimelineStepStatus.COMPLETED,
+        0, `Reintento iniciado (intento ${doc.retries + 1})`);
+    }
+
     let stepOrder = 1;
 
     try {
