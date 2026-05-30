@@ -8,6 +8,7 @@ import { DocumentProcessingService } from '../engine/processing/document-process
 import { Document } from '../entities/document.entity';
 import { DocStatus } from '../entities/enums';
 import { DOCUMENT_QUEUE } from './queues.constants';
+import { WebhookDeliveryService } from './webhook-delivery.service';
 
 export interface ProcessDocumentJob {
   documentId: number;
@@ -34,8 +35,18 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
     @InjectQueue(DOCUMENT_QUEUE) private readonly queue: Queue,
     @InjectRepository(Document) private readonly docRepo: Repository<Document>,
     private readonly config: ConfigService,
+    private readonly webhookDelivery: WebhookDeliveryService,
   ) {
     super();
+  }
+
+  /** Best-effort: enqueue a webhook for the document's current status. */
+  private async fireWebhook(documentId: number, status: DocStatus): Promise<void> {
+    try {
+      await this.webhookDelivery.enqueueForStatus(documentId, status);
+    } catch (err: any) {
+      this.logger.warn(`Failed to enqueue webhook for doc ${documentId}: ${err.message}`);
+    }
   }
 
   onModuleInit() {
@@ -59,6 +70,7 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
       // System/network failure: schedule a delayed automatic retry instead of
       // leaving the document dead. Business errors are not auto-retried.
       await this.maybeScheduleSystemRetry(documentId, result);
+      await this.fireWebhook(documentId, DocStatus.FAILED);
       return;
     }
 
@@ -68,7 +80,14 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
     if (result.status === 'processing') {
       // SRI accepted but hasn't authorized yet — schedule delayed auth check
       await this.scheduleAuthCheck(documentId, 0);
+      await this.fireWebhook(documentId, DocStatus.RECEIVED);
       return;
+    }
+
+    if (result.status === 'authorized') {
+      await this.fireWebhook(documentId, DocStatus.AUTHORIZED);
+    } else if (result.status === 'rejected') {
+      await this.fireWebhook(documentId, DocStatus.REJECTED);
     }
 
     this.logger.log(`Document ${documentId} finished: ${result.status} in ${result.processingTimeMs}ms`);
@@ -166,7 +185,16 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
     if (result.status === 'processing') {
       this.logger.warn(`Document ${documentId}: SRI still processing after ${MAX_AUTH_CHECK_RETRIES} auth checks — marking FAILED`);
       await this.docRepo.update(documentId, { status: DocStatus.FAILED });
+      await this.fireWebhook(documentId, DocStatus.FAILED);
       return;
+    }
+
+    if (result.status === 'authorized') {
+      await this.fireWebhook(documentId, DocStatus.AUTHORIZED);
+    } else if (result.status === 'rejected') {
+      await this.fireWebhook(documentId, DocStatus.REJECTED);
+    } else if (result.status === 'failed') {
+      await this.fireWebhook(documentId, DocStatus.FAILED);
     }
 
     this.logger.log(`Auth check for document ${documentId}: ${result.status}`);

@@ -257,6 +257,36 @@ export class PublicDocumentsService {
    * Get document detail with timeline, errors and files.
    * Identifies the document by its access key (49 digits).
    */
+  /**
+   * Find a document by the idempotency key it was emitted with.
+   * Returns the same shape as findOne() (estado, clave, errores, etc.).
+   */
+  async findByIdempotencyKey(companyId: number, key: string) {
+    const doc = await this.docRepo.findOne({
+      where: { idempotencyKey: key, companyId },
+      relations: ['company', 'timeline', 'errors', 'files'],
+    });
+    if (!doc) {
+      throw new NotFoundException(`No existe ningún documento con idempotencyKey "${key}" en esta empresa.`);
+    }
+    const tz = doc.company?.timezone ?? 'America/Guayaquil';
+    return {
+      ...this.formatResponse(doc),
+      timeline: (doc.timeline?.sort((a, b) => a.order - b.order) ?? []).map((t) => ({
+        ...t,
+        timestamp: formatDateTz(t.timestamp, tz),
+      })),
+      errors: doc.errors ?? [],
+      files: doc.files?.map((f) => ({
+        id: f.id,
+        type: f.type,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        createdAt: formatDateTz(f.createdAt, tz),
+      })) ?? [],
+    };
+  }
+
   async findOne(companyId: number, accessKey: string) {
     const doc = await this.docRepo.findOne({
       where: { accessKey, companyId },

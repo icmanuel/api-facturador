@@ -110,6 +110,20 @@ export class PublicDocumentsController {
     return this.service.findAll(companyId, page, limit, status, from, to);
   }
 
+  @Get('by-idempotency-key/:key')
+  @ApiOperation({
+    summary: 'Buscar documento por idempotencyKey',
+    description:
+      'Devuelve el documento asociado al idempotencyKey si existe en esta empresa, o 404 si nunca llegó. Útil cuando una llamada de emisión sufrió un timeout y se desconoce si el documento se procesó.',
+  })
+  @ApiParam({ name: 'key', description: 'idempotencyKey enviado en la emisión' })
+  findByIdempotencyKey(
+    @CurrentCompany('id') companyId: number,
+    @Param('key') key: string,
+  ) {
+    return this.service.findByIdempotencyKey(companyId, key);
+  }
+
   @Get(':claveAcceso')
   @ApiOperation({
     summary: 'Detalle de un documento (estado, timeline, errores, archivos)',
