@@ -8,6 +8,7 @@ import { DocumentFile } from '../entities/document-file.entity';
 import { Certificate } from '../entities/certificate.entity';
 import { EmissionPoint } from '../entities/emission-point.entity';
 import { CompanyDocType } from '../entities/company-doc-type.entity';
+import { Account } from '../entities/account.entity';
 import { EngineModule } from '../engine/engine.module';
 import { QueuesModule } from '../queues/queues.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -21,7 +22,7 @@ import { InfoService } from './info/info.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Company, Document, DocumentTimeline, DocumentError, DocumentFile, Certificate, EmissionPoint, CompanyDocType]),
+    TypeOrmModule.forFeature([Company, Document, DocumentTimeline, DocumentError, DocumentFile, Certificate, EmissionPoint, CompanyDocType, Account]),
     EngineModule,
     QueuesModule,
     NotificationsModule,

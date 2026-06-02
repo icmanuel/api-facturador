@@ -15,6 +15,8 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { UploadCertificateDto } from '../../client/companies/dto/upload-certificate.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
 import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
+import { UpdateCompanyInfoDto } from './dto/update-company-info.dto';
+import { UpdateCompanyRucDto } from './dto/update-company-ruc.dto';
 import { imageFileFilter, resolveImageMime } from '../../common/utils/image-upload.util';
 
 @ApiTags('API Pública - Empresa')
@@ -31,6 +33,30 @@ export class InfoController {
   @ApiOperation({ summary: 'Información de la empresa autenticada' })
   getCompany(@CurrentCompany() company: Company) {
     return this.service.getCompanyInfo(company);
+  }
+
+  @Patch()
+  @ApiOperation({
+    summary: 'Actualizar datos generales de la empresa',
+    description: 'Modifica razón social, nombre comercial, email, teléfono y/o dirección. Todos los campos son opcionales; envíe solo los que desea cambiar. Para cambiar el RUC use PATCH /company/ruc.',
+  })
+  updateCompany(
+    @CurrentCompany() company: Company,
+    @Body() dto: UpdateCompanyInfoDto,
+  ) {
+    return this.service.updateInfo(company, dto);
+  }
+
+  @Patch('ruc')
+  @ApiOperation({
+    summary: 'Cambiar el RUC de la empresa',
+    description: 'Permitido solo mientras la empresa no tenga comprobantes autorizados en producción. Sincroniza el RUC de la cuenta para cuentas de empresa única.',
+  })
+  updateRuc(
+    @CurrentCompany() company: Company,
+    @Body() dto: UpdateCompanyRucDto,
+  ) {
+    return this.service.updateRuc(company, dto.ruc);
   }
 
   @Get('certificate')

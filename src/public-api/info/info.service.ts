@@ -6,10 +6,12 @@ import { Company } from '../../entities/company.entity';
 import { Certificate } from '../../entities/certificate.entity';
 import { Document } from '../../entities/document.entity';
 import { EmissionPoint } from '../../entities/emission-point.entity';
+import { Account } from '../../entities/account.entity';
 import { CertificatesService } from '../../admin/certificates/certificates.service';
 import { S3StorageService } from '../../engine/storage/s3.service';
-import { CompanyEnv } from '../../entities/enums';
+import { AccountType, CompanyEnv, DocStatus } from '../../entities/enums';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
+import { UpdateCompanyInfoDto } from './dto/update-company-info.dto';
 import { CreateEmissionPointDto } from '../../admin/companies/dto/create-emission-point.dto';
 import { UpdateEmissionPointDto } from '../../admin/companies/dto/update-emission-point.dto';
 
@@ -24,9 +26,83 @@ export class InfoService {
     private readonly docRepo: Repository<Document>,
     @InjectRepository(EmissionPoint)
     private readonly emissionPointRepo: Repository<EmissionPoint>,
+    @InjectRepository(Account)
+    private readonly accountRepo: Repository<Account>,
     private readonly certificatesService: CertificatesService,
     private readonly s3Service: S3StorageService,
   ) {}
+
+  /* ────────── Información general de la empresa ────────── */
+
+  async updateInfo(company: Company, dto: UpdateCompanyInfoDto) {
+    if (Object.keys(dto).length === 0) {
+      return this.getCompanyInfo(company);
+    }
+    const patch: Partial<Company> = {};
+    if (dto.name !== undefined) patch.name = dto.name;
+    if (dto.tradeName !== undefined) patch.tradeName = dto.tradeName;
+    if (dto.email !== undefined) patch.email = dto.email;
+    if (dto.phone !== undefined) patch.phone = dto.phone;
+    if (dto.address !== undefined) patch.address = dto.address;
+    await this.companyRepo.update(company.id, patch);
+    const updated = await this.companyRepo.findOne({
+      where: { id: company.id },
+      relations: ['plan'],
+    });
+    return this.getCompanyInfo(updated ?? company);
+  }
+
+  /**
+   * Cambiar el RUC de la empresa. Bloqueado si la empresa ya tiene
+   * comprobantes AUTORIZADOS en producción (identidad fiscal locked-in).
+   * Sincroniza el RUC de la cuenta para cuentas de empresa única.
+   */
+  async updateRuc(company: Company, newRuc: string) {
+    if (company.ruc === newRuc) {
+      return this.getCompanyInfo(company);
+    }
+
+    const authorizedProd = await this.docRepo.count({
+      where: {
+        companyId: company.id,
+        status: DocStatus.AUTHORIZED,
+        env: CompanyEnv.PRODUCTION,
+      },
+    });
+    if (authorizedProd > 0) {
+      throw new ConflictException(
+        'No se puede cambiar el RUC: la empresa ya tiene comprobantes autorizados en producción. ' +
+          'Contacte a soporte si necesita modificarlo.',
+      );
+    }
+
+    const clashCompany = await this.companyRepo
+      .createQueryBuilder('c')
+      .where('c.ruc = :ruc AND c.id <> :id', { ruc: newRuc, id: company.id })
+      .getOne();
+    if (clashCompany) {
+      throw new ConflictException(`Ya existe una empresa registrada con el RUC ${newRuc}.`);
+    }
+
+    await this.companyRepo.update(company.id, { ruc: newRuc });
+
+    const account = await this.accountRepo.findOne({ where: { id: company.accountId } });
+    if (account && account.type === AccountType.SINGLE && account.ruc !== newRuc) {
+      const accountRucTaken = await this.accountRepo
+        .createQueryBuilder('a')
+        .where('a.ruc = :ruc AND a.id <> :id', { ruc: newRuc, id: account.id })
+        .getOne();
+      if (!accountRucTaken) {
+        await this.accountRepo.update(account.id, { ruc: newRuc });
+      }
+    }
+
+    const updated = await this.companyRepo.findOne({
+      where: { id: company.id },
+      relations: ['plan'],
+    });
+    return this.getCompanyInfo(updated ?? company);
+  }
 
   /* ────────── Logo (para el RIDE/PDF) ────────── */
 
