@@ -198,6 +198,97 @@ export class AccountsService {
   }
 
   /**
+   * Activity report: every tenant with its last usage and document totals.
+   * Ordered by lastActivityAt desc (NULLs at the bottom).
+   */
+  async getActivityReport(): Promise<Array<{
+    accountId: number;
+    name: string;
+    ruc: string;
+    email: string;
+    type: string;
+    status: string;
+    isActive: boolean;
+    trialEndsAt: Date | null;
+    createdAt: Date;
+    companiesCount: number;
+    documentsTotal: number;
+    documentsAuthorized: number;
+    documentsRejected: number;
+    documentsFailed: number;
+    lastDocumentAt: Date | null;
+    lastActivityAt: Date | null;
+  }>> {
+    const rows = await this.repo.manager.query<Array<{
+      acc_id: number;
+      acc_name: string;
+      acc_ruc: string;
+      acc_email: string;
+      acc_type: string;
+      acc_status: string;
+      acc_is_active: boolean;
+      acc_trial_ends_at: Date | null;
+      acc_created_at: Date;
+      companies_count: string;
+      documents_total: string;
+      documents_authorized: string;
+      documents_rejected: string;
+      documents_failed: string;
+      last_document_at: Date | null;
+      last_activity_at: Date | null;
+    }>>(
+      `
+      WITH per_account AS (
+        SELECT
+          a.acc_id,
+          a.acc_name,
+          a.acc_ruc,
+          a.acc_email,
+          a.acc_type,
+          a.acc_status,
+          a.acc_is_active,
+          a.acc_trial_ends_at,
+          a.acc_created_at,
+          COUNT(DISTINCT c.com_id) AS companies_count,
+          COUNT(d.doc_id)                                    AS documents_total,
+          COUNT(d.doc_id) FILTER (WHERE d.doc_status='AUTHORIZED') AS documents_authorized,
+          COUNT(d.doc_id) FILTER (WHERE d.doc_status='REJECTED')   AS documents_rejected,
+          COUNT(d.doc_id) FILTER (WHERE d.doc_status='FAILED')     AS documents_failed,
+          MAX(d.doc_created_at) AS last_document_at
+        FROM app.account a
+        LEFT JOIN app.company c   ON c.acc_id = a.acc_id
+        LEFT JOIN app.document d  ON d.com_id = c.com_id
+        GROUP BY a.acc_id
+      )
+      SELECT
+        p.*,
+        GREATEST(p.last_document_at, p.acc_created_at) AS last_activity_at
+      FROM per_account p
+      ORDER BY GREATEST(p.last_document_at, p.acc_created_at) DESC NULLS LAST;
+      `,
+    );
+
+    return rows.map((r) => ({
+      accountId: Number(r.acc_id),
+      name: r.acc_name,
+      ruc: r.acc_ruc,
+      email: r.acc_email,
+      type: r.acc_type,
+      status: r.acc_status,
+      isActive: r.acc_is_active,
+      trialEndsAt: r.acc_trial_ends_at,
+      createdAt: r.acc_created_at,
+      companiesCount: Number(r.companies_count),
+      documentsTotal: Number(r.documents_total),
+      documentsAuthorized: Number(r.documents_authorized),
+      documentsRejected: Number(r.documents_rejected),
+      documentsFailed: Number(r.documents_failed),
+      lastDocumentAt: r.last_document_at,
+      lastActivityAt: r.last_activity_at,
+    }));
+  }
+
+  /**
    * Extend (or start) the trial period by N days. If the current trial is still
    * in the future, the days are added on top of it; otherwise they count from now.
    */

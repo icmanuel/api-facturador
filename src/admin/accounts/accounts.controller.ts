@@ -39,6 +39,15 @@ export class AccountsController {
     return this.service.findAll(page, limit, search);
   }
 
+  @Get('activity')
+  @ApiOperation({
+    summary: 'Reporte de actividad por tenant',
+    description: 'Lista todas las cuentas con su último uso del sistema y número de documentos emitidos. Ordenado por última actividad (más reciente primero).',
+  })
+  getActivityReport() {
+    return this.service.getActivityReport();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de cuenta' })
   findOne(@Param('id', ParseIntPipe) id: number) {
