@@ -14,6 +14,7 @@ import { SettingsModule } from './admin/settings/settings.module';
 import { DashboardModule } from './admin/dashboard/dashboard.module';
 import { PlatformAdminsModule } from './admin/platform-admins/platform-admins.module';
 import { ErrorAnalyticsModule } from './admin/error-analytics/error-analytics.module';
+import { SystemModule } from './admin/system/system.module';
 import { ClientProfileModule } from './client/profile/profile.module';
 import { ClientCompaniesModule } from './client/companies/companies.module';
 import { ClientDocumentsModule } from './client/documents/documents.module';
@@ -46,6 +47,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     DashboardModule,
     PlatformAdminsModule,
     ErrorAnalyticsModule,
+    SystemModule,
     // Client modules
     ClientProfileModule,
     ClientCompaniesModule,

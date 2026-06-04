@@ -108,6 +108,15 @@ export class SriService {
     return this.circuits[env === CompanyEnv.PRODUCTION ? 'production' : 'test'];
   }
 
+  /** Forzar el cierre del breaker (operación admin tras un incidente). */
+  resetCircuit(envName?: 'production' | 'test'): void {
+    const targets = envName ? [envName] : (['production', 'test'] as const);
+    for (const t of targets) {
+      this.circuits[t] = this.initialCircuit();
+      this.logger.warn(`SRI circuit breaker manualmente CERRADO para ${t}`);
+    }
+  }
+
   /** Returns true when the circuit blocks the attempt; transitions to half-open if the open period has elapsed. */
   private shouldShortCircuit(cb: CircuitState): boolean {
     if (cb.state === 'closed') return false;
