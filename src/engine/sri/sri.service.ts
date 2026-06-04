@@ -50,11 +50,114 @@ const RETRYABLE_MESSAGE_HINTS = [
 ];
 
 const MAX_NETWORK_RETRIES = 5; // 6 attempts total
+
+/**
+ * Circuit-breaker thresholds. Keeps the engine from hammering the SRI when
+ * it's clearly down — drops the per-doc 5-min retry burn while the outage
+ * lasts. State is per env (production/test) and per process.
+ */
+const CB_FAILURE_THRESHOLD = 4;     // failures within window to trip the breaker
+const CB_WINDOW_MS = 5 * 60_000;    // 5-minute sliding window
+const CB_OPEN_MS = 5 * 60_000;      // hold the breaker open for 5 min before probing
+const CB_MAX_OPEN_MS = 30 * 60_000; // hard cap when consecutive probes also fail
 const NETWORK_RETRY_DELAYS = [3000, 8000, 20000, 45000, 90000]; // ~3 min total before giving up
+
+interface CircuitState {
+  state: 'closed' | 'open' | 'half-open';
+  openedAt: number;
+  openMs: number;          // how long this open period lasts
+  consecutiveOpens: number; // for exponential extension when probes keep failing
+  failures: number[];      // timestamps of recent failures inside the sliding window
+}
 
 @Injectable()
 export class SriService {
   private readonly logger = new Logger(SriService.name);
+
+  /** Per-env circuit breaker state. Stops hammering the SRI during outages. */
+  private readonly circuits: Record<string, CircuitState> = {
+    production: this.initialCircuit(),
+    test: this.initialCircuit(),
+  };
+
+  private initialCircuit(): CircuitState {
+    return { state: 'closed', openedAt: 0, openMs: CB_OPEN_MS, consecutiveOpens: 0, failures: [] };
+  }
+
+  /** Snapshot for diagnostics/admin endpoints. */
+  getCircuitStatus(): Record<string, {
+    state: string;
+    openedAt: string | null;
+    msUntilProbe: number;
+    recentFailures: number;
+  }> {
+    const out: ReturnType<SriService['getCircuitStatus']> = {};
+    for (const [env, cb] of Object.entries(this.circuits)) {
+      const elapsed = Date.now() - cb.openedAt;
+      out[env] = {
+        state: cb.state,
+        openedAt: cb.openedAt ? new Date(cb.openedAt).toISOString() : null,
+        msUntilProbe: cb.state === 'open' ? Math.max(0, cb.openMs - elapsed) : 0,
+        recentFailures: cb.failures.length,
+      };
+    }
+    return out;
+  }
+
+  private circuitFor(env: CompanyEnv): CircuitState {
+    return this.circuits[env === CompanyEnv.PRODUCTION ? 'production' : 'test'];
+  }
+
+  /** Returns true when the circuit blocks the attempt; transitions to half-open if the open period has elapsed. */
+  private shouldShortCircuit(cb: CircuitState): boolean {
+    if (cb.state === 'closed') return false;
+    const elapsed = Date.now() - cb.openedAt;
+    if (cb.state === 'open' && elapsed >= cb.openMs) {
+      cb.state = 'half-open';
+      this.logger.log(`SRI circuit breaker → HALF-OPEN: probando con la siguiente petición`);
+      return false; // let one attempt through as probe
+    }
+    return cb.state === 'open';
+  }
+
+  private recordFailure(cb: CircuitState, label: string): void {
+    const now = Date.now();
+    cb.failures = cb.failures.filter((t) => now - t < CB_WINDOW_MS);
+    cb.failures.push(now);
+
+    if (cb.state === 'half-open') {
+      // Probe failed — extend the open period (capped).
+      cb.consecutiveOpens += 1;
+      cb.openMs = Math.min(CB_OPEN_MS * Math.pow(2, cb.consecutiveOpens), CB_MAX_OPEN_MS);
+      cb.openedAt = now;
+      cb.state = 'open';
+      this.logger.warn(
+        `SRI circuit breaker → OPEN (probe ${cb.consecutiveOpens} failed): cortando ${Math.round(cb.openMs / 60000)}min más`,
+      );
+      return;
+    }
+
+    if (cb.state === 'closed' && cb.failures.length >= CB_FAILURE_THRESHOLD) {
+      cb.state = 'open';
+      cb.openedAt = now;
+      cb.openMs = CB_OPEN_MS;
+      cb.consecutiveOpens = 1;
+      this.logger.warn(
+        `SRI circuit breaker → OPEN: ${cb.failures.length} fallos en ${Math.round(CB_WINDOW_MS / 60000)}min (${label}). ` +
+          `Cortando intentos por ${Math.round(cb.openMs / 60000)}min.`,
+      );
+    }
+  }
+
+  private recordSuccess(cb: CircuitState): void {
+    if (cb.state === 'closed') return;
+    this.logger.log(`SRI circuit breaker → CLOSED: petición exitosa, retomando operación normal`);
+    cb.state = 'closed';
+    cb.openedAt = 0;
+    cb.openMs = CB_OPEN_MS;
+    cb.consecutiveOpens = 0;
+    cb.failures = [];
+  }
 
   /**
    * Send signed XML to SRI for validation (recepción).
@@ -79,7 +182,7 @@ export class SriService {
 </soapenv:Envelope>`;
 
     const soapStart = Date.now();
-    const responseData = await this.soapCallWithRetry(url, soapEnvelope, 'reception');
+    const responseData = await this.soapCallWithRetry(url, soapEnvelope, 'reception', env);
     const soapMs = Date.now() - soapStart;
 
     this.logger.debug(`SRI reception raw response:\n${responseData}`);
@@ -109,7 +212,7 @@ export class SriService {
 </soapenv:Envelope>`;
 
     const soapStart = Date.now();
-    const responseData = await this.soapCallWithRetry(url, soapEnvelope, 'authorization');
+    const responseData = await this.soapCallWithRetry(url, soapEnvelope, 'authorization', env);
     const soapMs = Date.now() - soapStart;
 
     const result = this.parseAuthorizationResponse(responseData);
@@ -124,7 +227,23 @@ export class SriService {
    * Only retries on transient network failures (ECONNRESET, ETIMEDOUT, etc.),
    * NOT on SRI logic errors (those are handled by the caller).
    */
-  private async soapCallWithRetry(url: string, soapEnvelope: string, label: string): Promise<string> {
+  private async soapCallWithRetry(
+    url: string,
+    soapEnvelope: string,
+    label: string,
+    env: CompanyEnv,
+  ): Promise<string> {
+    const cb = this.circuitFor(env);
+
+    // Short-circuit: if the breaker is open we don't even open a socket.
+    // The job-level retry will pick it up later (5/15/45min/2h/6h backoff).
+    if (this.shouldShortCircuit(cb)) {
+      const min = Math.ceil((cb.openMs - (Date.now() - cb.openedAt)) / 60000);
+      throw new Error(
+        `SRI no disponible: incidente en curso (circuito abierto). El sistema reintentará automáticamente en ~${min} min.`,
+      );
+    }
+
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= MAX_NETWORK_RETRIES; attempt++) {
@@ -180,6 +299,7 @@ export class SriService {
           throw new Error('SRI devolvió una respuesta vacía o inválida');
         }
 
+        this.recordSuccess(cb);
         return data;
       } catch (error: any) {
         if (error instanceof AxiosError && this.isRetryableNetworkError(error)) {
@@ -191,7 +311,9 @@ export class SriService {
           }
         }
 
-        // Non-retryable error or exhausted retries
+        // Non-retryable error or exhausted retries — trip/extend the breaker.
+        this.recordFailure(cb, label);
+
         if (error.response?.data) {
           this.logger.error(`SRI ${label} response body:\n${error.response.data}`);
         }
