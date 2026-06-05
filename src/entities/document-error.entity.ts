@@ -17,7 +17,7 @@ export class DocumentError {
   @Column({ name: 'doc_id' })
   documentId: number;
 
-  @Column({ name: 'der_code', length: 10 })
+  @Column({ name: 'der_code', length: 30 })
   code: string;
 
   @Column({ name: 'der_message', length: 500 })

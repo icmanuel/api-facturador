@@ -26,6 +26,29 @@ const MAX_SYSTEM_RETRIES = 5;
 /** Delays between system-error retries: 5min, 15min, 45min, 2h, 6h */
 const SYSTEM_RETRY_DELAYS_MS = [5 * 60_000, 15 * 60_000, 45 * 60_000, 2 * 3_600_000, 6 * 3_600_000];
 
+/**
+ * Patrones de mensaje que indican un error NO transitorio (bug nuestro, error
+ * de datos, código programático). Reintentar no va a arreglarlos — siempre
+ * van a fallar igual. Se marcan FAILED definitivos para que un humano los
+ * vea y los corrija.
+ */
+const NON_RETRYABLE_PATTERNS = [
+  /value too long for type/i,
+  /duplicate key value violates/i,
+  /violates (not-null|check|foreign key)/i,
+  /relation .* does not exist/i,
+  /column .* does not exist/i,
+  /invalid input syntax for/i,
+  /syntax error/i,
+  /TypeError:/,
+  /ReferenceError:/,
+  /Cannot read prop/i,
+];
+
+function isNonRetryableError(message: string): boolean {
+  return NON_RETRYABLE_PATTERNS.some((rx) => rx.test(message));
+}
+
 @Processor(DOCUMENT_QUEUE, { concurrency: 5 })
 export class DocumentProcessor extends WorkerHost implements OnModuleInit {
   private readonly logger = new Logger(DocumentProcessor.name);
@@ -105,6 +128,18 @@ export class DocumentProcessor extends WorkerHost implements OnModuleInit {
     const isSystemError = result.errors.some((e) => e.code === 'SYS001');
     if (!isSystemError) {
       // Business error (bad XML, SRI validation, expired cert) — no auto-retry.
+      await this.clearSystemRetry(documentId);
+      return;
+    }
+
+    // Even within SYS001, some errors are clearly non-transient (DB constraint
+    // violations, programming bugs). Reintentar no los va a arreglar — los
+    // dejamos FAILED definitivos para que un humano los revise.
+    const isHardError = result.errors.some((e) => e.code === 'SYS001' && isNonRetryableError(e.message));
+    if (isHardError) {
+      this.logger.error(
+        `Document ${documentId}: error no transitorio — no reintenta. Mensaje: ${result.errors.find((e) => isNonRetryableError(e.message))?.message}`,
+      );
       await this.clearSystemRetry(documentId);
       return;
     }
